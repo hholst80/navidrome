@@ -3,7 +3,11 @@ package subsonic
 import (
 	"errors"
 	"fmt"
+	"github.com/Masterminds/squirrel"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -101,6 +105,9 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 
 	switch v := entity.(type) {
 	case *model.MediaFile:
+		if format == "raw" && v.CueTrack > 0 {
+			return nil, serveOriginalCUE(w, r, v)
+		}
 		streamReq := api.transcodeDecision.ResolveRequest(ctx, v, format, maxBitRate, 0)
 		stream, err := api.streamer.NewStream(ctx, v, streamReq)
 		if err != nil {
@@ -120,6 +127,15 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 		_, err = stream.Serve(ctx, w, r)
 		return nil, err
 	case *model.Album:
+		if format == "raw" {
+			tracks, err := api.ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album_id": id}})
+			if err != nil {
+				return nil, err
+			}
+			if source := singleCUESource(tracks); source != nil {
+				return nil, serveOriginalCUE(w, r, source)
+			}
+		}
 		setHeaders(v.Name)
 		return nil, handleArchiveErr(w, api.archiver.ZipAlbum(ctx, id, format, maxBitRate, w))
 	case *model.Artist:
@@ -143,4 +159,37 @@ func handleArchiveErr(w http.ResponseWriter, err error) error {
 		w.Header().Del("Content-Type")
 	}
 	return err
+}
+
+// Original downloads preserve the physical album image. Playback and converted
+// downloads still use virtual track boundaries through the media streamer.
+func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
+	if len(tracks) == 0 {
+		return nil
+	}
+	for _, track := range tracks {
+		if track.CueTrack == 0 || track.AbsolutePath() != tracks[0].AbsolutePath() {
+			return nil
+		}
+	}
+	return &tracks[0]
+}
+
+func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
+	f, err := os.Open(mf.AbsolutePath())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	name := filepath.Base(mf.Path)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, name, info.ModTime(), f)
+	return nil
 }

@@ -137,6 +137,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 
 	z := createZipWriter(out, format, bitrate)
 	usedNames := map[string]bool{}
+	usedSources := map[string]bool{}
 	albums := slice.Group(mfs, func(mf model.MediaFile) string {
 		return mf.AlbumID
 	})
@@ -146,6 +147,15 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Debug(ctx, "Zipping album", "name", album[0].Album, "artist", album[0].AlbumArtist,
 			"format", format, "bitrate", bitrate, "isMultiDisc", isMultiDisc, "numTracks", len(album))
 		for _, mf := range album {
+			if (format == "raw" || format == "") && mf.CueTrack > 0 {
+				source := mf.AbsolutePath()
+				if usedSources[source] {
+					continue
+				}
+				usedSources[source] = true
+				// Original format copies the source image once, without splitting.
+				mf.CueTrack = 0
+			}
 			file := uniqueArchiveName(a.albumFilename(mf, format, isMultiDisc), usedNames)
 			if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); addErr != nil {
 				// Return failures instead of silently delivering an incomplete album.

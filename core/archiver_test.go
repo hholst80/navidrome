@@ -117,7 +117,7 @@ var _ = Describe("Archiver", func() {
 				repo := &mockMediaFileRepository{}
 				repo.On("GetAll", mock.Anything).Return(tracks, nil)
 				ds.On("MediaFile", mock.Anything).Return(repo)
-				err = arch.ZipAlbum(context.Background(), "1", "raw", 0, out)
+				err = arch.ZipAlbum(context.Background(), "1", "flac", 0, out)
 			case "share":
 				err = arch.ZipShare(context.Background(), &model.Share{ID: "1", Downloadable: true, Format: "raw", Tracks: tracks}, out)
 			case "playlist":
@@ -155,7 +155,7 @@ var _ = Describe("Archiver", func() {
 				Return(io.NopCloser(strings.NewReader(track.ID)), nil).Once()
 		}
 		out := new(bytes.Buffer)
-		Expect(arch.ZipAlbum(context.Background(), "1", "raw", 0, out)).To(Succeed())
+		Expect(arch.ZipAlbum(context.Background(), "1", "flac", 0, out)).To(Succeed())
 		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(zr.File).To(HaveLen(4))

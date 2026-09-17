@@ -71,6 +71,19 @@ var _ = Describe("CUE archive downloads", func() {
 			Expect(arch.ZipAlbum(ctx, "album", format, 0, &out)).To(Succeed())
 			zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 			Expect(err).NotTo(HaveOccurred())
+			if format == "raw" || format == "" {
+				Expect(zr.File).To(HaveLen(1))
+				r, err := zr.File[0].Open()
+				Expect(err).NotTo(HaveOccurred())
+				data, err := io.ReadAll(r)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(r.Close()).To(Succeed())
+				original, err := os.ReadFile(source)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(data).To(Equal(original))
+				Expect(zr.File[0].Name).To(HaveSuffix("/album." + sourceFormat))
+				return
+			}
 			Expect(zr.File).To(HaveLen(2))
 			ext := sourceFormat
 			if format != "" && format != "raw" {
@@ -100,6 +113,7 @@ var _ = Describe("CUE archive downloads", func() {
 		Entry("default FLAC", "", "flac", false),
 		Entry("raw WAV", "raw", "wav", false),
 		Entry("converted WAV to FLAC", "flac", "wav", false),
-		Entry("multiple discs", "raw", "flac", true),
+		Entry("converted FLAC", "flac", "flac", false),
+		Entry("multiple discs converted", "flac", "flac", true),
 	)
 })
