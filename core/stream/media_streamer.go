@@ -2,6 +2,8 @@ package stream
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -57,7 +59,13 @@ type streamJob struct {
 }
 
 func (j *streamJob) Key() string {
-	return fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d.%d.%d.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset, j.mf.CueTrack, j.mf.CueStartSample, j.mf.CueEndSample)
+	key := fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d.%d.%d.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset, j.mf.CueTrack, j.mf.CueStartSample, j.mf.CueEndSample)
+	if segment := cueSegment(j.mf); segment != nil {
+		// JSON sorts map keys, so all embedded tags contribute deterministically.
+		tags, _ := json.Marshal(segment.Tags)
+		key += fmt.Sprintf(".%x", sha256.Sum256(tags))
+	}
+	return key
 }
 
 // NewStream creates a Stream for the given MediaFile and Request. It handles both raw streaming (no transcoding)

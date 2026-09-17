@@ -234,12 +234,13 @@ func readCUERem(cuesheet *Cuesheet, line string) error {
 		}
 		cuesheet.Rem[key] = value
 	} else {
-		cuesheet.Rem[key] = line
+		cuesheet.Rem[key] = strings.Trim(line, delims)
 	}
 	return nil
 }
 
 func readCUECatalog(cuesheet *Cuesheet, line string) error {
+	line = strings.Trim(line, delims)
 	if len(cuesheet.Catalog) > 0 {
 		return ErrorDuplicateCatalog
 	}
@@ -411,6 +412,7 @@ func readTrackFlags(track *Track, line string) error {
 }
 
 func readTrackISRC(track *Track, line string) error {
+	line = strings.Trim(line, delims)
 	if len(track.ISRC) > 0 {
 		return ErrorDuplicateTrackISRC
 	}
@@ -493,7 +495,7 @@ func readTrackRem(track *Track, line string) error {
 		}
 		track.Rem[key] = value
 	} else {
-		track.Rem[key] = line
+		track.Rem[key] = strings.Trim(line, delims)
 	}
 	return nil
 }
@@ -543,6 +545,7 @@ func ReadCue(r io.Reader) (*Cuesheet, error) {
 
 		if firstLine {
 			firstLine = false
+			line = strings.TrimPrefix(line, "\uFEFF")
 			if !cueRegex.MatchString(line) {
 				return nil, ErrorParseCUE
 			}

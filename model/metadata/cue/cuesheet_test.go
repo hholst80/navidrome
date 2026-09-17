@@ -30,6 +30,39 @@ func TestTrackStringFieldWhitespace(t *testing.T) {
 	}
 }
 
+func TestMetadataWhitespace(t *testing.T) {
+	for _, sep := range []string{" ", "   ", "\t", " \t "} {
+		t.Run(fmt.Sprintf("%q", sep), func(t *testing.T) {
+			text := "FILE \"album.flac\" WAVE\n" +
+				"CATALOG" + sep + "1234567890123 \t\n" +
+				"REM" + sep + "GENRE" + sep + "Folk Rock \t\n" +
+				"REM DATE" + sep + "2026 \t\n" +
+				"REM COMMENT" + sep + "\"  intentional spaces  \"\n" +
+				"  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n" +
+				"    ISRC" + sep + "USABC2600001 \t\n" +
+				"    REM COMMENT" + sep + "Two words \t\n" +
+				"    REM REPLAYGAIN_TRACK_GAIN" + sep + "-3.00 dB \t\n"
+			sheet, err := ReadCue(strings.NewReader(text))
+			require.NoError(t, err)
+			assert.Equal(t, "1234567890123", sheet.Catalog)
+			assert.Equal(t, "Folk Rock", sheet.Rem.Genre())
+			assert.Equal(t, "2026", sheet.Rem.Date())
+			assert.Equal(t, "  intentional spaces  ", sheet.Rem.Comment())
+			track := sheet.File[0].Tracks[0]
+			assert.Equal(t, "USABC2600001", track.ISRC)
+			assert.Equal(t, "Two words", track.Rem.Comment())
+			assert.Equal(t, "-3.00 dB", track.Rem.TrackGain())
+		})
+	}
+}
+
+func TestBOMBeforeFile(t *testing.T) {
+	sheet, err := ReadCue(strings.NewReader("\uFEFFFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"))
+	require.NoError(t, err)
+	require.Len(t, sheet.File, 1)
+	assert.Equal(t, "album.flac", sheet.File[0].FileName)
+}
+
 func TestFrame_Duration(t *testing.T) {
 	tests := []struct {
 		input  Frame
@@ -259,6 +292,7 @@ func TestCueReader(t *testing.T) {
 		{
 			inputFile: "test.cue",
 			check: func(output *Cuesheet) {
+				assert.Equal(t, "Folk", output.Rem.Genre())
 				assert.Equal(t, "Into The Otherworld", output.Title)
 				assert.Equal(t, 1, len(output.File))
 				assert.Equal(t, 11, len(output.File[0].Tracks))

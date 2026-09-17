@@ -76,6 +76,19 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (m
 		set(model.TagTrackArtist, cmp.Or(t.Performer, sheet.Performer))
 		set(model.TagTrackNumber, strconv.Itoa(int(t.TrackNumber)))
 		set(model.TagTotalTracks, strconv.Itoa(len(file.Tracks)))
+		if sheet.Rem.DiscNumber() > 0 || sheet.Rem.TotalDiscs() > 0 {
+			disc, total := md.NumAndTotal(model.TagDiscNumber)
+			if n := sheet.Rem.DiscNumber(); n > 0 {
+				disc = n
+			}
+			if n := sheet.Rem.TotalDiscs(); n > 0 {
+				total = n
+			}
+			set(model.TagDiscNumber, fmt.Sprintf("%d/%d", disc, total))
+			if total > 0 {
+				set(model.TagTotalDiscs, strconv.Itoa(total))
+			}
+		}
 		set(model.TagGenre, sheet.Rem.Genre())
 		set(model.TagRecordingDate, sheet.Rem.Date())
 		set(model.TagISRC, t.ISRC)
