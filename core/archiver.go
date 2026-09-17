@@ -98,7 +98,10 @@ func createZipWriter(out io.Writer, format string, bitrate int) *zip.Writer {
 
 func (a *archiver) albumFilename(mf model.MediaFile, format string, isMultiDisc bool) string {
 	_, file := filepath.Split(mf.Path)
-	if format != "raw" {
+	if mf.CueTrack > 0 {
+		file = fmt.Sprintf("%02d - %s.%s", mf.CueTrack, str.SanitizeFilename(mf.Title), mf.Suffix)
+	}
+	if format != "raw" && format != "" {
 		file = strings.TrimSuffix(file, mf.Suffix) + format
 	}
 	if isMultiDisc {
@@ -187,7 +190,7 @@ func (a *archiver) addFileToZip(ctx context.Context, z *zip.Writer, mf model.Med
 	// archive.
 	var r io.ReadCloser
 	var err error
-	if format != "raw" && format != "" {
+	if mf.CueTrack > 0 || (format != "raw" && format != "") {
 		r, err = a.ms.NewStream(ctx, &mf, stream.Request{Format: format, BitRate: bitrate})
 	} else {
 		r, err = os.Open(path)
