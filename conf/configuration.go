@@ -1053,6 +1053,7 @@ func setViperDefaults() {
 	viper.SetDefault("jukebox.default", "")
 	viper.SetDefault("jukebox.adminonly", true)
 	viper.SetDefault("scanner.enabled", true)
+	viper.SetDefault("scanner.cuesheetsupport", false)
 	viper.SetDefault("scanner.schedule", "0")
 	viper.SetDefault("scanner.extractor", consts.DefaultScannerExtractor)
 	viper.SetDefault("scanner.watcherwait", consts.DefaultWatcherWait)
