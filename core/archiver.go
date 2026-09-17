@@ -3,7 +3,6 @@ package core
 import (
 	"archive/zip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,6 +57,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 	}
 
 	z := createZipWriter(out, format, bitrate)
+	usedNames := map[string]bool{}
 	albums := slice.Group(mfs, func(mf model.MediaFile) string {
 		return mf.AlbumID
 	})
@@ -67,13 +67,9 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Debug(ctx, "Zipping album", "name", album[0].Album, "artist", album[0].AlbumArtist,
 			"format", format, "bitrate", bitrate, "isMultiDisc", isMultiDisc, "numTracks", len(album))
 		for _, mf := range album {
-			file := a.albumFilename(mf, format, isMultiDisc)
-			if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); errors.Is(addErr, stream.ErrTooManyTranscodes) {
-				// Stop iterating: continuing would just rack up more
-				// rejections from the limiter. Close finalises whatever
-				// tracks were already written; the rejected one is not
-				// present in the archive (addFileToZip aborts before
-				// writing its entry header).
+			file := uniqueArchiveName(a.albumFilename(mf, format, isMultiDisc), usedNames)
+			if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); addErr != nil {
+				// Return failures instead of silently delivering an incomplete album.
 				_ = z.Close()
 				return addErr
 			}
@@ -84,6 +80,17 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Error(ctx, "Error closing zip file", "id", id, err)
 	}
 	return err
+}
+
+func uniqueArchiveName(name string, used map[string]bool) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	candidate := name
+	for n := 2; used[strings.ToLower(candidate)]; n++ {
+		candidate = fmt.Sprintf("%s (%d)%s", base, n, ext)
+	}
+	used[strings.ToLower(candidate)] = true
+	return candidate
 }
 
 func createZipWriter(out io.Writer, format string, bitrate int) *zip.Writer {
@@ -137,9 +144,8 @@ func (a *archiver) zipMediaFiles(ctx context.Context, id, name string, format st
 	zippedMfs := make(model.MediaFiles, len(mfs))
 	for idx, mf := range mfs {
 		file := a.playlistFilename(mf, format, idx)
-		if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); errors.Is(addErr, stream.ErrTooManyTranscodes) {
-			// Abort the whole archive: continuing would silently emit
-			// empty zip entries since the headers are already written.
+		if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); addErr != nil {
+			// Stop before adding a playlist that would refer to a failed entry.
 			_ = z.Close()
 			return addErr
 		}
