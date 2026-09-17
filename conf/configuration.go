@@ -164,6 +164,7 @@ type configOptions struct {
 }
 
 type scannerOptions struct {
+	CUESheetSupport       bool // Expand single-file FLAC/WAV CUE sheets into virtual tracks (requires FFmpeg)
 	Enabled               bool
 	Schedule              string
 	WatcherWait           time.Duration

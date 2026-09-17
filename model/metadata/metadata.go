@@ -68,8 +68,16 @@ func NewPair(key, value string) string {
 }
 
 func New(filePath string, info Info) Metadata {
+	var cueText string
+	for key, values := range info.Tags {
+		if strings.EqualFold(key, "cuesheet") && len(values) > 0 {
+			cueText = values[0]
+			break
+		}
+	}
 	return Metadata{
 		filePath:   filePath,
+		cueText:    cueText,
 		fileInfo:   info.FileInfo,
 		tags:       clean(filePath, info.Tags),
 		audioProps: info.AudioProperties,
@@ -78,6 +86,7 @@ func New(filePath string, info Info) Metadata {
 }
 
 type Metadata struct {
+	cueText    string
 	filePath   string
 	fileInfo   FileInfo
 	tags       model.Tags
@@ -407,3 +416,6 @@ func sanitize(filePath string, tagName model.TagName, tag model.TagConf, value s
 	}
 	return value
 }
+
+// CUEText returns a text CUESHEET tag without mapping or persisting it as metadata.
+func (md Metadata) CUEText() string { return md.cueText }
