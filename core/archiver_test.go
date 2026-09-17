@@ -102,11 +102,13 @@ var _ = Describe("Archiver", func() {
 				{ID: "2", Path: "album.flac", CueTrack: 2, Title: "Second", Suffix: "flac", Album: "Album", AlbumID: "1"},
 			}
 			failure := errors.New("track extraction failed")
+			ms.On("NewStream", mock.Anything, &tracks[0], mock.Anything).
+				Return(io.NopCloser(strings.NewReader("first track")), nil).Once()
 			if readFailure {
-				ms.On("NewStream", mock.Anything, mock.Anything, mock.Anything).
+				ms.On("NewStream", mock.Anything, &tracks[1], mock.Anything).
 					Return(io.NopCloser(iotest.ErrReader(failure)), nil).Once()
 			} else {
-				ms.On("NewStream", mock.Anything, mock.Anything, mock.Anything).Return(nil, failure).Once()
+				ms.On("NewStream", mock.Anything, &tracks[1], mock.Anything).Return(nil, failure).Once()
 			}
 			out := new(bytes.Buffer)
 			var err error
@@ -126,7 +128,8 @@ var _ = Describe("Archiver", func() {
 				err = arch.ZipPlaylist(context.Background(), "1", "raw", 0, out)
 			}
 			Expect(err).To(MatchError(failure))
-			ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 1)
+			Expect(out.Len()).To(BeZero())
+			ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 2)
 		},
 		Entry("album stream creation", "album", false),
 		Entry("album stream reading", "album", true),
@@ -188,6 +191,7 @@ var _ = Describe("Archiver", func() {
 			out := new(bytes.Buffer)
 			err := arch.ZipAlbum(context.Background(), "1", "mp3", 128, out)
 			Expect(err).To(MatchError(stream.ErrTooManyTranscodes))
+			Expect(out.Len()).To(BeZero())
 			// NewStream should only have been called once: the loop must bail
 			// out on the rejection instead of trying every remaining track.
 			ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 1)

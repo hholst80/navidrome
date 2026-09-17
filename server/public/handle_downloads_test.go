@@ -131,4 +131,20 @@ var _ = Describe("handleDownloads", func() {
 		Expect(w.Code).To(Equal(http.StatusInternalServerError))
 		Expect(archiver.called).To(BeFalse())
 	})
+
+	It("returns a clean error response when archive generation fails", func() {
+		shareIs(&model.Share{ID: "abc123", Downloadable: true})
+		archiver.err = errors.New("track extraction failed")
+		w := makeRequest("abc123")
+		Expect(w.Code).To(Equal(http.StatusInternalServerError))
+		Expect(w.Header().Get("Content-Disposition")).To(BeEmpty())
+		Expect(w.Header().Get("Content-Type")).To(HavePrefix("text/plain"))
+		Expect(w.Body.String()).To(Equal("Error retrieving share\n"))
+	})
+
+	It("aborts a failed archive delivery without appending an error document", func() {
+		shareIs(&model.Share{ID: "abc123", Downloadable: true})
+		archiver.err = core.ErrArchiveDelivery
+		Expect(func() { makeRequest("abc123") }).To(PanicWith(http.ErrAbortHandler))
+	})
 })

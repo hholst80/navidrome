@@ -3,6 +3,7 @@ package core
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,10 @@ type Archiver interface {
 	ZipPlaylist(ctx context.Context, id string, format string, bitrate int, w io.Writer) error
 }
 
+// ErrArchiveDelivery means generation succeeded but sending the archive failed.
+// HTTP handlers must abort the response instead of appending an error document.
+var ErrArchiveDelivery = errors.New("archive delivery failed")
+
 func NewArchiver(ms stream.MediaStreamer, ds model.DataStore, shares Share) Archiver {
 	return &archiver{ds: ds, ms: ms, shares: shares}
 }
@@ -36,7 +41,9 @@ type archiver struct {
 }
 
 func (a *archiver) ZipAlbum(ctx context.Context, id string, format string, bitrate int, out io.Writer) error {
-	return a.zipAlbums(ctx, id, format, bitrate, out, squirrel.Eq{"album_id": id})
+	return stageArchive(out, func(w io.Writer) error {
+		return a.zipAlbums(ctx, id, format, bitrate, w, squirrel.Eq{"album_id": id})
+	})
 }
 
 func (a *archiver) ZipArtist(ctx context.Context, id string, format string, bitrate int, out io.Writer) error {
@@ -46,7 +53,33 @@ func (a *archiver) ZipArtist(ctx context.Context, id string, format string, bitr
 		persistence.ParticipantIDFilter("media_file", id, model.RoleAlbumArtist),
 		squirrel.Eq{"missing": false},
 	}
-	return a.zipAlbums(ctx, id, format, bitrate, out, filter)
+	return stageArchive(out, func(w io.Writer) error {
+		return a.zipAlbums(ctx, id, format, bitrate, w, filter)
+	})
+}
+
+// stageArchive keeps track-generation failures from committing a partial HTTP
+// response. Disk staging avoids holding an entire album in memory.
+func stageArchive(out io.Writer, write func(io.Writer) error) error {
+	f, err := os.CreateTemp("", "navidrome-archive-*.zip")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	if err := write(f); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err = io.Copy(out, f)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrArchiveDelivery, err)
+	}
+	return err
 }
 
 func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitrate int, out io.Writer, filters squirrel.Sqlizer) error {
@@ -124,7 +157,9 @@ func (a *archiver) ZipShare(ctx context.Context, s *model.Share, out io.Writer) 
 		return model.ErrNotAuthorized
 	}
 	log.Debug(ctx, "Zipping share", "name", s.ID, "format", s.Format, "bitrate", s.MaxBitRate, "numTracks", len(s.Tracks))
-	return a.zipMediaFiles(ctx, s.ID, s.ID, s.Format, s.MaxBitRate, out, s.Tracks, false)
+	return stageArchive(out, func(w io.Writer) error {
+		return a.zipMediaFiles(ctx, s.ID, s.ID, s.Format, s.MaxBitRate, w, s.Tracks, false)
+	})
 }
 
 func (a *archiver) ZipPlaylist(ctx context.Context, id string, format string, bitrate int, out io.Writer) error {
@@ -135,7 +170,9 @@ func (a *archiver) ZipPlaylist(ctx context.Context, id string, format string, bi
 	}
 	mfs := pls.MediaFiles()
 	log.Debug(ctx, "Zipping playlist", "name", pls.Name, "format", format, "bitrate", bitrate, "numTracks", len(mfs))
-	return a.zipMediaFiles(ctx, id, pls.Name, format, bitrate, out, mfs, true)
+	return stageArchive(out, func(w io.Writer) error {
+		return a.zipMediaFiles(ctx, id, pls.Name, format, bitrate, w, mfs, true)
+	})
 }
 
 func (a *archiver) zipMediaFiles(ctx context.Context, id, name string, format string, bitrate int, out io.Writer, mfs model.MediaFiles, addM3U bool) error {
