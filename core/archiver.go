@@ -43,7 +43,7 @@ type archiver struct {
 
 func (a *archiver) ZipAlbum(ctx context.Context, id string, format string, bitrate int, out io.Writer) error {
 	return stageArchive(ctx, out, func(w io.Writer) error {
-		return a.zipAlbums(ctx, id, format, bitrate, w, squirrel.Eq{"album_id": id})
+		return a.zipAlbums(ctx, id, format, bitrate, w, squirrel.Eq{"album_id": id, "missing": false})
 	})
 }
 
@@ -147,7 +147,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Debug(ctx, "Zipping album", "name", album[0].Album, "artist", album[0].AlbumArtist,
 			"format", format, "bitrate", bitrate, "isMultiDisc", isMultiDisc, "numTracks", len(album))
 		for _, mf := range album {
-			if (format == "raw" || format == "") && mf.CueTrack > 0 {
+			if format == "raw" || format == "" {
 				source := mf.AbsolutePath()
 				if usedSources[source] {
 					continue

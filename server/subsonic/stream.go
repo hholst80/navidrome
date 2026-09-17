@@ -128,7 +128,7 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 		return nil, err
 	case *model.Album:
 		if format == "raw" {
-			tracks, err := api.ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album_id": id}})
+			tracks, err := api.ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album_id": id, "missing": false}})
 			if err != nil {
 				return nil, err
 			}

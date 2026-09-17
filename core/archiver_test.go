@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing/iotest"
 
@@ -43,7 +45,7 @@ var _ = Describe("Archiver", func() {
 
 			mfRepo := &mockMediaFileRepository{}
 			mfRepo.On("GetAll", []model.QueryOptions{{
-				Filters: squirrel.Eq{"album_id": "1"},
+				Filters: squirrel.Eq{"album_id": "1", "missing": false},
 				Sort:    "album",
 			}}).Return(mfs, nil)
 
@@ -139,6 +141,34 @@ var _ = Describe("Archiver", func() {
 		Entry("playlist stream reading", "playlist", true),
 	)
 
+	DescribeTable("copies each original CUE source once despite a historical ordinary row", func(format string, ordinaryFirst bool) {
+		source := filepath.Join(GinkgoT().TempDir(), "album.flac")
+		original := []byte("unchanged album source")
+		Expect(os.WriteFile(source, original, 0600)).To(Succeed())
+		ordinary := model.MediaFile{ID: "old", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", Missing: true}
+		tracks := model.MediaFiles{{ID: "cue1", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", CueTrack: 1}, {ID: "cue2", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", CueTrack: 2}}
+		if ordinaryFirst {
+			tracks = append(model.MediaFiles{ordinary}, tracks...)
+		} else {
+			tracks = append(tracks, ordinary)
+		}
+		repo := &mockMediaFileRepository{}
+		repo.On("GetAll", mock.Anything).Return(tracks, nil)
+		ds.On("MediaFile", mock.Anything).Return(repo)
+		var out bytes.Buffer
+		Expect(arch.ZipAlbum(context.Background(), "1", format, 0, &out)).To(Succeed())
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zr.File).To(HaveLen(1))
+		r, err := zr.File[0].Open()
+		Expect(err).NotTo(HaveOccurred())
+		data, err := io.ReadAll(r)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Close()).To(Succeed())
+		Expect(data).To(Equal(original))
+		ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 0)
+	}, Entry("raw ordinary first", "raw", true), Entry("raw ordinary last", "raw", false), Entry("default ordinary first", "", true), Entry("default ordinary last", "", false))
+
 	It("disambiguates colliding names from separate CUE images and existing suffixed names", func() {
 		tracks := model.MediaFiles{
 			{ID: "1", Path: "one.flac", CueTrack: 1, Title: "Same/Title", Suffix: "flac", Album: "Album", AlbumID: "1"},
@@ -180,7 +210,7 @@ var _ = Describe("Archiver", func() {
 
 			mfRepo := &mockMediaFileRepository{}
 			mfRepo.On("GetAll", []model.QueryOptions{{
-				Filters: squirrel.Eq{"album_id": "1"},
+				Filters: squirrel.Eq{"album_id": "1", "missing": false},
 				Sort:    "album",
 			}}).Return(mfs, nil)
 			ds.On("MediaFile", mock.Anything).Return(mfRepo)

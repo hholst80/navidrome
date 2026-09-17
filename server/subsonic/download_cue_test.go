@@ -2,6 +2,7 @@ package subsonic
 
 import (
 	"context"
+	"github.com/Masterminds/squirrel"
 	"io"
 	"mime"
 	"net/http/httptest"
@@ -52,6 +53,9 @@ var _ = Describe("CUE original downloads", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(params["filename"]).To(Equal("original album.flac"))
 			Expect(archiver.format).To(BeEmpty())
+			if id == "album" {
+				Expect(repo.Options.Filters).To(Equal(squirrel.Eq{"album_id": "album", "missing": false}))
+			}
 		} else {
 			Expect(archiver.format).To(Equal("flac"))
 			Expect(w.Header().Get("Content-Type")).To(Equal("application/zip"))
