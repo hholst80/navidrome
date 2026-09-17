@@ -400,3 +400,25 @@ func TestCueReader(t *testing.T) {
 		})
 	}
 }
+
+func TestCUESizeLimit(t *testing.T) {
+	const limit = 1024 * 1024
+	prefix := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"
+	// Empty lines form a valid prefix, so truncation must not masquerade as EOF.
+	exact := prefix + strings.Repeat("\n", limit-len(prefix))
+	_, err := ReadCue(strings.NewReader(exact))
+	require.NoError(t, err)
+	sheet, err := ReadCue(strings.NewReader(exact + "\n  TRACK 02 AUDIO\n    INDEX 01 01:00:00\n"))
+	require.ErrorIs(t, err, ErrorCUETooLarge)
+	require.Nil(t, sheet)
+}
+
+func TestDuplicateZeroValueTrackFields(t *testing.T) {
+	for _, field := range []string{"PREGAP 00:00:00", "POSTGAP 00:00:00", "FLAGS UNKNOWN"} {
+		t.Run(field, func(t *testing.T) {
+			text := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n    " + field + "\n    " + field + "\n"
+			_, err := ReadCue(strings.NewReader(text))
+			require.Error(t, err)
+		})
+	}
+}

@@ -113,6 +113,43 @@ var _ = Describe("Scanner", Ordered, func() {
 		return queued
 	}
 
+	It("refreshes sidecar CUE tracks when a sheet is edited, shortened, and removed", func() {
+		conf.Server.Scanner.CUESheetSupport = true
+		album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album", "samplerate": 44100, "duration": 120})
+		fs := createFS(fstest.MapFS{"one/album.flac": album()})
+		sheet := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n"
+		update := func(text string, minute int) {
+			when := time.Now().Add(time.Duration(minute) * time.Minute)
+			fs.Add("one/album.cue", &fstest.MapFile{Data: []byte(text), ModTime: when}, when)
+		}
+		active := func() model.MediaFiles {
+			tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}, Sort: "track_number"})
+			Expect(err).NotTo(HaveOccurred())
+			return tracks
+		}
+		update(sheet+"  TRACK 02 AUDIO\n    TITLE \"Second\"\n    INDEX 01 01:00:00\n", 1)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		initial := active()
+		Expect(initial).To(HaveLen(2))
+		Expect(initial[0].CueEndSample).To(Equal(int64(60 * 44100)))
+		update(sheet+"  TRACK 02 AUDIO\n    TITLE \"Renamed\"\n    INDEX 01 00:45:00\n", 2)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		edited := active()
+		Expect(edited).To(HaveLen(2))
+		Expect(edited[1].ID).To(Equal(initial[1].ID))
+		Expect(edited[1].Title).To(Equal("Renamed"))
+		Expect(edited[0].CueEndSample).To(Equal(int64(45 * 44100)))
+		update(sheet, 3)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		Expect(active()).To(HaveLen(1))
+		Expect(active()[0].CueEndSample).To(BeZero())
+		fs.Remove("one/album.cue", time.Now().Add(4*time.Minute))
+		Expect(runScanner(ctx, false)).To(Succeed())
+		restored := active()
+		Expect(restored).To(HaveLen(1))
+		Expect(restored[0].CueTrack).To(BeZero())
+	})
+
 	Context("CUE support setting changes", func() {
 		BeforeEach(func() {
 			album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album",

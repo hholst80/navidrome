@@ -17,6 +17,7 @@ import (
 
 const (
 	delims          = "\t\n\r "
+	maxCUESize      = 1024 * 1024
 	framesPerSecond = 75 // is based on audio CD sectors and 44100 Hz sample rate
 	remGenre        = "GENRE"
 	remComment      = "COMMENT"
@@ -57,6 +58,7 @@ const (
 )
 
 var (
+	ErrorCUETooLarge              = errors.New("CUE sheet exceeds 1 MiB size limit")
 	ErrorParseCUE                 = fmt.Errorf("no CUE data")
 	ErrorFrameFormat              = fmt.Errorf("invalid frame format")
 	ErrorInvalidISRC              = fmt.Errorf("invalid ISRC")
@@ -151,6 +153,9 @@ type Track struct {
 	PreGap        Frame
 	PostGap       Frame
 	Index         []TrackIndex
+	flagsSeen     bool
+	preGapSeen    bool
+	postGapSeen   bool
 }
 
 // File instance
@@ -393,9 +398,10 @@ func parseFlag(flag string) Flags {
 }
 
 func readTrackFlags(track *Track, line string) error {
-	if track.Flags != None {
+	if track.flagsSeen {
 		return ErrorDuplicateTrackFlags
 	}
+	track.flagsSeen = true
 	track.Flags = None
 	for len(line) > 0 {
 		flag, err := readString(&line)
@@ -432,25 +438,27 @@ func readTrackStringField(value *string, line string, duplicateErr error, fieldN
 }
 
 func readTrackPreGap(track *Track, line string) error {
-	if track.PreGap > 0 {
+	if track.preGapSeen {
 		return ErrorDuplicateTrackPreGap
 	}
 	value, err := readString(&line)
 	if err != nil {
 		return fmt.Errorf("PREGAP: %w", err)
 	}
+	track.preGapSeen = true
 	track.PreGap, err = frameFromString(value)
 	return err
 }
 
 func readTrackPostGap(track *Track, line string) error {
-	if track.PostGap > 0 {
+	if track.postGapSeen {
 		return ErrorDuplicateTrackPostGap
 	}
 	value, err := readString(&line)
 	if err != nil {
 		return fmt.Errorf("POSTGAP: %w", err)
 	}
+	track.postGapSeen = true
 	track.PostGap, err = frameFromString(value)
 	return err
 }
@@ -533,7 +541,9 @@ func readTrackFields(track *Track, line string) error {
 
 // ReadCue loads and parses CUESHEET from reader
 func ReadCue(r io.Reader) (*Cuesheet, error) {
-	s := bufio.NewScanner(r)
+	// Read one byte past the limit to distinguish oversized input from clean EOF.
+	limited := &io.LimitedReader{R: r, N: maxCUESize + 1}
+	s := bufio.NewScanner(limited)
 	cuesheet := &Cuesheet{}
 
 	firstLine := true
@@ -593,6 +603,9 @@ func ReadCue(r io.Reader) (*Cuesheet, error) {
 		}
 	}
 
+	if limited.N == 0 {
+		return nil, ErrorCUETooLarge
+	}
 	if err := s.Err(); err != nil {
 		return nil, err
 	}

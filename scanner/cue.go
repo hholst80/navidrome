@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"fmt"
-	"io"
 	"maps"
 	"path"
 	"slices"
@@ -33,8 +32,8 @@ func (p *phaseFolders) cueSources(entry *folderEntry) map[string]cueSource {
 			p.cueWarning(name, err)
 			continue
 		}
-		// Bound work for malformed/untrusted sidecars.
-		sheet, err := cue.ReadCue(io.LimitReader(f, 1024*1024+1))
+		// The parser bounds input size and rejects oversized sheets.
+		sheet, err := cue.ReadCue(f)
 		_ = f.Close()
 		if err != nil {
 			p.cueWarning(name, err)
