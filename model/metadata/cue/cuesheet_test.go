@@ -1,13 +1,34 @@
 package cue
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTrackStringFieldWhitespace(t *testing.T) {
+	for _, separator := range []string{" ", "   ", "\t", " \t "} {
+		for _, value := range []string{`"A multi word value"`, `A multi word value`, `"A multi word value`} {
+			t.Run(fmt.Sprintf("%q/%q", separator, value), func(t *testing.T) {
+				text := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"
+				for _, field := range []string{"TITLE", "PERFORMER", "SONGWRITER"} {
+					text += "    " + field + separator + value + "\n"
+				}
+				sheet, err := ReadCue(strings.NewReader(text))
+				require.NoError(t, err)
+				track := sheet.File[0].Tracks[0]
+				assert.Equal(t, "A multi word value", track.Title)
+				assert.Equal(t, "A multi word value", track.Performer)
+				assert.Equal(t, "A multi word value", track.SongWriter)
+			})
+		}
+	}
+}
 
 func TestFrame_Duration(t *testing.T) {
 	tests := []struct {

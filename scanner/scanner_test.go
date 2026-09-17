@@ -113,6 +113,77 @@ var _ = Describe("Scanner", Ordered, func() {
 		return queued
 	}
 
+	Context("CUE support setting changes", func() {
+		BeforeEach(func() {
+			album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album",
+				"samplerate": 44100, "duration": 120, "cuesheet": `FILE "album.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "First"
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "Second"
+    INDEX 01 01:00:00
+`})
+			createFS(fstest.MapFS{
+				"one/album.flac": album(),
+				"two/album.flac": album(_t{"album": "Other Cue Album"}),
+			})
+			Expect(runScanner(ctx, false)).To(Succeed())
+		})
+
+		activeTracks := func() model.MediaFiles {
+			GinkgoHelper()
+			tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+			Expect(err).NotTo(HaveOccurred())
+			return tracks
+		}
+
+		It("refreshes unchanged embedded sheets when enabled and restores ordinary files when disabled", func() {
+			Expect(activeTracks()).To(HaveLen(2))
+			conf.Server.Scanner.CUESheetSupport = true
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(4))
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("quick"))
+			conf.Server.Scanner.CUESheetSupport = false
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(2))
+			for _, track := range activeTracks() {
+				Expect(track.CueTrack).To(BeZero())
+			}
+		})
+
+		It("retries a CUE refresh after a failed scan", func() {
+			conf.Server.Scanner.CUESheetSupport = true
+			mfRepo.GetMissingAndMatchingError = errors.New("CUE refresh interrupted")
+			Expect(runScanner(ctx, false)).NotTo(Succeed())
+			Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("true"))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUESheetSupportKey)).To(Equal("false"))
+			mfRepo.GetMissingAndMatchingError = nil
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(4))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("false"))
+		})
+
+		DescribeTable("keeps a refresh pending after a selective scan",
+			func(enabled bool, expectedTracks int) {
+				conf.Server.Scanner.CUESheetSupport = true
+				_, err := s.ScanFolders(ctx, false, []model.ScanTarget{{LibraryID: 1, FolderPath: "one"}})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(activeTracks()).To(HaveLen(3))
+				Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("true"))
+				conf.Server.Scanner.CUESheetSupport = enabled
+				Expect(runScanner(ctx, false)).To(Succeed())
+				Expect(activeTracks()).To(HaveLen(expectedTracks))
+				Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+				Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("false"))
+			},
+			Entry("until all folders are refreshed", true, 4),
+			Entry("even if the setting is reverted", false, 2),
+		)
+	})
+
 	Context("Simple library, 'artis/album/track - title.mp3'", func() {
 		var help, revolver func(...map[string]any) *fstest.MapFile
 		var fsys storagetest.FakeFS

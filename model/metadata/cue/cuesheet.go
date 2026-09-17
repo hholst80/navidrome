@@ -422,7 +422,7 @@ func readTrackISRC(track *Track, line string) error {
 }
 
 func readTrackStringField(value *string, line string, duplicateErr error, fieldName string) error {
-	v, closed := unquote(line)
+	v, closed := unquote(strings.TrimLeft(line, delims))
 	if !closed {
 		log.Warn(fmt.Sprintf("Unclosed quote in track %s, using rest of line", fieldName), "value", v)
 	}
@@ -623,7 +623,7 @@ func readString(s *string) (string, error) {
 		return v, nil
 	}
 	for i := 0; i < len(*s); i++ {
-		if (*s)[i] == ' ' {
+		if strings.ContainsRune(delims, rune((*s)[i])) {
 			v := (*s)[0:i]
 			*s = (*s)[i+1:]
 			return v, nil

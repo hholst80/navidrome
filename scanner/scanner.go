@@ -6,6 +6,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -82,8 +83,27 @@ func (s *scannerImpl) scanFolders(ctx context.Context, fullScan bool, targets []
 		changesDetected: atomic.Bool{},
 	}
 
+	previousCUESupport, err := s.ds.Property(ctx).DefaultGet(consts.ScannerCUESheetSupportKey, "false")
+	if err != nil {
+		state.sendError(fmt.Errorf("getting previous CUE support setting: %w", err))
+		return
+	}
+	if previousCUESupport != strconv.FormatBool(conf.Server.Scanner.CUESheetSupport) {
+		log.Info(ctx, "Scanner: CUE support setting changed, forcing full scan")
+		if err := s.ds.Property(ctx).Put(consts.ScannerCUERefreshPendingKey, "true"); err != nil {
+			state.sendError(fmt.Errorf("marking CUE refresh pending: %w", err))
+			return
+		}
+	}
+	cueRefreshPending, err := s.ds.Property(ctx).DefaultGet(consts.ScannerCUERefreshPendingKey, "false")
+	if err != nil {
+		state.sendError(fmt.Errorf("getting pending CUE refresh: %w", err))
+		return
+	}
+	state.fullScan = state.fullScan || cueRefreshPending == "true"
+
 	// Set changesDetected to true for full scans to ensure all maintenance operations run
-	if fullScan {
+	if state.fullScan {
 		state.changesDetected.Store(true)
 	}
 
@@ -354,6 +374,15 @@ func (s *scannerImpl) runUpdateLibraries(ctx context.Context, state *scanState) 
 					}
 				} else {
 					log.Debug(ctx, "Scanner: No changes detected, skipping library stats refresh", "lib", lib.Name)
+				}
+			}
+			// A selective scan cannot establish the CUE setting for unvisited folders.
+			if !state.isSelectiveScan() {
+				if err := tx.Property(ctx).Put(consts.ScannerCUESheetSupportKey, strconv.FormatBool(conf.Server.Scanner.CUESheetSupport)); err != nil {
+					return fmt.Errorf("updating CUE support setting: %w", err)
+				}
+				if err := tx.Property(ctx).Put(consts.ScannerCUERefreshPendingKey, "false"); err != nil {
+					return fmt.Errorf("clearing pending CUE refresh: %w", err)
 				}
 			}
 			log.Debug(ctx, "Scanner: Updated libraries after scan", "elapsed", time.Since(start), "numLibraries", len(state.libraries))
