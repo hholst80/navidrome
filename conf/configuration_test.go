@@ -163,6 +163,13 @@ var _ = Describe("Configuration", func() {
 			Expect(conf.Server.Scanner.Schedule).To(Equal("@every 1h"))
 		})
 
+		It("loads the archive size limit from the environment", func() {
+			GinkgoT().Setenv("ND_MAXARCHIVESIZEBYTES", "104857600")
+			conf.InitConfig("", true)
+			conf.Load(true)
+			Expect(conf.Server.MaxArchiveSizeBytes).To(Equal(int64(104857600)))
+		})
+
 		It("loads CUE support from the environment", func() {
 			GinkgoT().Setenv("ND_SCANNER_CUESHEETSUPPORT", "true")
 			conf.InitConfig("", true)

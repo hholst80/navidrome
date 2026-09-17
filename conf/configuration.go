@@ -992,6 +992,7 @@ func setViperDefaults() {
 	viper.SetDefault("playlistspath", "")
 	viper.SetDefault("smartPlaylistRefreshDelay", consts.DefaultSmartRefresh)
 	viper.SetDefault("enabledownloads", true)
+	viper.SetDefault("maxarchivesizebytes", int64(0))
 	viper.SetDefault("enableexternalservices", true)
 	viper.SetDefault("enablem3uexternalalbumart", false)
 	viper.SetDefault("enablemediafilecoverart", true)
