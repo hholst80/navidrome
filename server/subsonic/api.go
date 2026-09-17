@@ -305,6 +305,8 @@ func mapToSubsonicError(err error) subError {
 		err = newError(responses.ErrorDataNotFound, "data not found")
 	case errors.Is(err, model.ErrNotAuthorized), errors.Is(err, model.ErrPlaylistNotEditable): // Subsonic has no code for "read-only resource"
 		err = newError(responses.ErrorAuthorizationFail)
+	case errors.Is(err, core.ErrArchiveBusy):
+		err = newError(responses.ErrorGeneric, "too many concurrent archive downloads, please retry shortly")
 	case errors.Is(err, stream.ErrTooManyTranscodes):
 		err = newError(responses.ErrorGeneric, "too many concurrent transcodes, please retry shortly")
 	default:
@@ -316,7 +318,7 @@ func mapToSubsonicError(err error) subError {
 }
 
 func sendError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, stream.ErrTooManyTranscodes) {
+	if errors.Is(err, stream.ErrTooManyTranscodes) || errors.Is(err, core.ErrArchiveBusy) {
 		w.Header().Set("Retry-After", strconv.Itoa(stream.RetryAfterSeconds))
 		sendResponseWithStatus(w, r, errorResponse(err), http.StatusTooManyRequests)
 		return

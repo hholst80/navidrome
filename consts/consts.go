@@ -20,6 +20,8 @@ const (
 	LastScanErrorKey              = "LastScanError"
 	LastScanTypeKey               = "LastScanType"
 	LastScanStartTimeKey          = "LastScanStartTime"
+	ScannerCUESheetSupportKey     = "ScannerCUESheetSupport"
+	ScannerCUERefreshPendingKey   = "ScannerCUERefreshPending"
 	LastDBAnalyzeAtKey            = "LastDBAnalyzeAt"
 	LastDBAnalyzeAttemptAtKey     = "LastDBAnalyzeAttemptAt"
 	DBAnalyzePendingKey           = "DBAnalyzePending"

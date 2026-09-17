@@ -23,6 +23,10 @@ import (
 )
 
 type MediaFile struct {
+	CueTrack       int   `structs:"cue_track" json:"-"` // 0 is an ordinary file; otherwise the CUE track number
+	CueStartSample int64 `structs:"cue_start_sample" json:"-"`
+	CueEndSample   int64 `structs:"cue_end_sample" json:"-"` // exclusive; 0 means end of source
+
 	Annotations  `structs:"-" hash:"ignore"`
 	Bookmarkable `structs:"-" hash:"ignore"`
 	ItemImage    `structs:"-" hash:"ignore"`
@@ -339,6 +343,7 @@ func (mfs MediaFiles) ToAlbum() Album {
 	a.Missing = true
 	embedArtPath := ""
 	embedArtDisc := 0
+	countedSources := map[string]bool{}
 	for _, m := range mfs {
 		// We assume these attributes are all the same for all songs in an album
 		a.ID = m.AlbumID
@@ -358,7 +363,10 @@ func (mfs MediaFiles) ToAlbum() Album {
 
 		// Calculated attributes based on aggregations
 		a.Duration += m.Duration
-		a.Size += m.Size
+		if m.CueTrack == 0 || !countedSources[m.Path] {
+			a.Size += m.Size
+			countedSources[m.Path] = true
+		}
 		years = append(years, m.Year)
 		dates = append(dates, m.Date)
 		originalYears = append(originalYears, m.OriginalYear)

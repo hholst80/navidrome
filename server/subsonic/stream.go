@@ -1,15 +1,18 @@
 package subsonic
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"github.com/Masterminds/squirrel"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/navidrome/navidrome/conf"
-	"github.com/navidrome/navidrome/core/stream"
+	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
@@ -102,6 +105,9 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 
 	switch v := entity.(type) {
 	case *model.MediaFile:
+		if format == "raw" && v.CueTrack > 0 {
+			return nil, serveOriginalCUE(w, r, v)
+		}
 		streamReq := api.transcodeDecision.ResolveRequest(ctx, v, format, maxBitRate, 0)
 		stream, err := api.streamer.NewStream(ctx, v, streamReq)
 		if err != nil {
@@ -121,29 +127,69 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 		_, err = stream.Serve(ctx, w, r)
 		return nil, err
 	case *model.Album:
+		if format == "raw" {
+			tracks, err := api.ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"album_id": id, "missing": false}})
+			if err != nil {
+				return nil, err
+			}
+			if source := singleCUESource(tracks); source != nil {
+				return nil, serveOriginalCUE(w, r, source)
+			}
+		}
 		setHeaders(v.Name)
-		return nil, handleArchiveErr(ctx, id, api.archiver.ZipAlbum(ctx, id, format, maxBitRate, w))
+		return nil, handleArchiveErr(w, api.archiver.ZipAlbum(ctx, id, format, maxBitRate, w))
 	case *model.Artist:
 		setHeaders(v.Name)
-		return nil, handleArchiveErr(ctx, id, api.archiver.ZipArtist(ctx, id, format, maxBitRate, w))
+		return nil, handleArchiveErr(w, api.archiver.ZipArtist(ctx, id, format, maxBitRate, w))
 	case *model.Playlist:
 		setHeaders(v.Name)
-		return nil, handleArchiveErr(ctx, id, api.archiver.ZipPlaylist(ctx, id, format, maxBitRate, w))
+		return nil, handleArchiveErr(w, api.archiver.ZipPlaylist(ctx, id, format, maxBitRate, w))
 	default:
 		return nil, model.ErrNotFound
 	}
 }
 
-// handleArchiveErr swallows ErrTooManyTranscodes from archive downloads so the
-// outer error handler does not try to write a 429 onto a response whose status
-// and Content-Disposition have already been flushed. The archive ends up with
-// the tracks that were written before the rejection (the rejected track and
-// any following ones are omitted); the server-side log is the unambiguous
-// signal operators can act on.
-func handleArchiveErr(ctx context.Context, id string, err error) error {
-	if errors.Is(err, stream.ErrTooManyTranscodes) {
-		log.Warn(ctx, "Archive download finalized early: transcode cap reached", "id", id, err)
-		return nil
+// Archive generation is staged, so failures can still produce a normal API error.
+func handleArchiveErr(w http.ResponseWriter, err error) error {
+	if errors.Is(err, core.ErrArchiveDelivery) {
+		panic(http.ErrAbortHandler)
+	}
+	if err != nil {
+		w.Header().Del("Content-Disposition")
+		w.Header().Del("Content-Type")
 	}
 	return err
+}
+
+// Original downloads preserve the physical album image. Playback and converted
+// downloads still use virtual track boundaries through the media streamer.
+func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
+	if len(tracks) == 0 {
+		return nil
+	}
+	for _, track := range tracks {
+		if track.CueTrack == 0 || track.AbsolutePath() != tracks[0].AbsolutePath() {
+			return nil
+		}
+	}
+	return &tracks[0]
+}
+
+func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
+	f, err := os.Open(mf.AbsolutePath())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	name := filepath.Base(mf.Path)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, name, info.ModTime(), f)
+	return nil
 }

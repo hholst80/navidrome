@@ -24,8 +24,9 @@ import (
 
 // TranscodeOptions contains all parameters for a transcoding operation.
 type TranscodeOptions struct {
-	Command    string // DB command template (used to detect custom vs default)
-	Format     string // Target format (mp3, opus, aac, flac)
+	Segment    *AudioSegment // nil for ordinary files
+	Command    string        // DB command template (used to detect custom vs default)
+	Format     string        // Target format (mp3, opus, aac, flac)
 	FilePath   string
 	BitRate    int     // kbps, 0 = codec default
 	SampleRate int     // 0 = no constraint
@@ -80,6 +81,9 @@ func (e *ffmpeg) Transcode(ctx context.Context, opts TranscodeOptions) (io.ReadC
 	}
 	if err := fileExists(opts.FilePath); err != nil {
 		return nil, err
+	}
+	if opts.Segment != nil {
+		return e.transcodeSegment(ctx, opts)
 	}
 	var args []string
 	if isDefaultCommand(opts.Format, opts.Command) {
@@ -432,6 +436,7 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 
 // formatCodecMap maps target format to ffmpeg codec flag.
 var formatCodecMap = map[string]string{
+	"wav":  "pcm_s16le",
 	"mp3":  "libmp3lame",
 	"opus": "libopus",
 	"aac":  "aac",
@@ -440,6 +445,7 @@ var formatCodecMap = map[string]string{
 
 // formatOutputMap maps target format to ffmpeg output format flag (-f).
 var formatOutputMap = map[string]string{
+	"wav":  "wav",
 	"mp3":  "mp3",
 	"opus": "opus",
 	"aac":  "adts",

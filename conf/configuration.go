@@ -54,6 +54,7 @@ type configOptions struct {
 	MaxSidebarPlaylists             int
 	EnableTranscodingConfig         bool
 	EnableDownloads                 bool
+	MaxArchiveSizeBytes             int64 // <= 0 uses 2 GiB; at most two ZIP downloads run concurrently.
 	EnableExternalServices          bool
 	EnableM3UExternalAlbumArt       bool
 	EnableInsightsCollector         bool
@@ -164,6 +165,7 @@ type configOptions struct {
 }
 
 type scannerOptions struct {
+	CUESheetSupport       bool // Expand single-file FLAC/WAV CUE sheets into virtual tracks (requires FFmpeg)
 	Enabled               bool
 	Schedule              string
 	WatcherWait           time.Duration
@@ -990,6 +992,7 @@ func setViperDefaults() {
 	viper.SetDefault("playlistspath", "")
 	viper.SetDefault("smartPlaylistRefreshDelay", consts.DefaultSmartRefresh)
 	viper.SetDefault("enabledownloads", true)
+	viper.SetDefault("maxarchivesizebytes", int64(0))
 	viper.SetDefault("enableexternalservices", true)
 	viper.SetDefault("enablem3uexternalalbumart", false)
 	viper.SetDefault("enablemediafilecoverart", true)
@@ -1052,6 +1055,7 @@ func setViperDefaults() {
 	viper.SetDefault("jukebox.default", "")
 	viper.SetDefault("jukebox.adminonly", true)
 	viper.SetDefault("scanner.enabled", true)
+	viper.SetDefault("scanner.cuesheetsupport", false)
 	viper.SetDefault("scanner.schedule", "0")
 	viper.SetDefault("scanner.extractor", consts.DefaultScannerExtractor)
 	viper.SetDefault("scanner.watcherwait", consts.DefaultWatcherWait)
