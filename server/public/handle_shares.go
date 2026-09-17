@@ -8,6 +8,7 @@ import (
 
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
+	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/core/auth"
 	"github.com/navidrome/navidrome/core/publicurl"
 	"github.com/navidrome/navidrome/log"
@@ -65,6 +66,11 @@ func (pub *Router) handleM3U(w http.ResponseWriter, r *http.Request) {
 
 func checkShareError(ctx context.Context, w http.ResponseWriter, err error, id string) {
 	switch {
+	case errors.Is(err, core.ErrArchiveBusy):
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+	case errors.Is(err, core.ErrArchiveTooLarge):
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	case errors.Is(err, model.ErrExpired):
 		log.Error(ctx, "Share expired", "id", id, err)
 		http.Error(w, "Share not available anymore", http.StatusGone)

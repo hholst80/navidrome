@@ -54,6 +54,7 @@ type configOptions struct {
 	MaxSidebarPlaylists             int
 	EnableTranscodingConfig         bool
 	EnableDownloads                 bool
+	MaxArchiveSizeBytes             int64 // <= 0 uses 2 GiB; at most two ZIP downloads run concurrently.
 	EnableExternalServices          bool
 	EnableM3UExternalAlbumArt       bool
 	EnableInsightsCollector         bool

@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -22,8 +23,8 @@ func TestArchiveStaging(t *testing.T) {
 				destination = failedArchiveWriter{failure}
 			}
 			var name string
-			err := stageArchive(destination, func(w io.Writer) error {
-				name = w.(*os.File).Name()
+			err := stageArchive(context.Background(), destination, func(w io.Writer) error {
+				name = w.(*archiveStagingWriter).out.(*os.File).Name()
 				if _, err := io.WriteString(w, "archive contents"); err != nil {
 					return err
 				}
@@ -47,4 +48,58 @@ func TestArchiveStaging(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArchiveResourceLimits(t *testing.T) {
+	t.Run("size limit", func(t *testing.T) {
+		var out bytes.Buffer
+		w := &archiveStagingWriter{ctx: context.Background(), out: &out, remaining: 3}
+		if _, err := w.Write([]byte("abc")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("d")); !errors.Is(err, ErrArchiveTooLarge) {
+			t.Fatalf("got %v", err)
+		}
+		if out.String() != "abc" {
+			t.Fatalf("limit exceeded: %q", out.String())
+		}
+	})
+	t.Run("cancel during generation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var out bytes.Buffer
+		var name string
+		err := stageArchive(ctx, &out, func(w io.Writer) error {
+			name = w.(*archiveStagingWriter).out.(*os.File).Name()
+			if _, err := w.Write([]byte("first track")); err != nil {
+				return err
+			}
+			cancel()
+			_, err := w.Write([]byte("second track"))
+			return err
+		})
+		if !errors.Is(err, context.Canceled) || out.Len() != 0 {
+			t.Fatalf("output=%q err=%v", out.String(), err)
+		}
+		if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("temporary archive retained: %v", err)
+		}
+	})
+	t.Run("concurrent capacity", func(t *testing.T) {
+		// Nested calls keep both slots occupied while testing the third request.
+		err := stageArchive(context.Background(), io.Discard, func(io.Writer) error {
+			return stageArchive(context.Background(), io.Discard, func(io.Writer) error {
+				return stageArchive(context.Background(), io.Discard, func(io.Writer) error {
+					t.Fatal("excess request started generating an archive")
+					return nil
+				})
+			})
+		})
+		if !errors.Is(err, ErrArchiveBusy) {
+			t.Fatalf("got %v", err)
+		}
+		if len(archiveSlots) != 0 {
+			t.Fatal("archive slots leaked")
+		}
+	})
 }

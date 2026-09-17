@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -41,7 +42,7 @@ type archiver struct {
 }
 
 func (a *archiver) ZipAlbum(ctx context.Context, id string, format string, bitrate int, out io.Writer) error {
-	return stageArchive(out, func(w io.Writer) error {
+	return stageArchive(ctx, out, func(w io.Writer) error {
 		return a.zipAlbums(ctx, id, format, bitrate, w, squirrel.Eq{"album_id": id})
 	})
 }
@@ -53,14 +54,56 @@ func (a *archiver) ZipArtist(ctx context.Context, id string, format string, bitr
 		persistence.ParticipantIDFilter("media_file", id, model.RoleAlbumArtist),
 		squirrel.Eq{"missing": false},
 	}
-	return stageArchive(out, func(w io.Writer) error {
+	return stageArchive(ctx, out, func(w io.Writer) error {
 		return a.zipAlbums(ctx, id, format, bitrate, w, filter)
 	})
 }
 
-// stageArchive keeps track-generation failures from committing a partial HTTP
-// response. Disk staging avoids holding an entire album in memory.
-func stageArchive(out io.Writer, write func(io.Writer) error) error {
+// ErrArchiveBusy indicates that both archive download slots are occupied.
+var ErrArchiveBusy = errors.New("archive download capacity reached")
+
+// ErrArchiveTooLarge indicates that the temporary ZIP reached its size limit.
+var ErrArchiveTooLarge = errors.New("archive exceeds configured size limit")
+
+// Hold slots through delivery, so slow clients cannot accumulate staged files.
+var archiveSlots = make(chan struct{}, 2)
+
+const defaultMaxArchiveSizeBytes int64 = 2 * 1024 * 1024 * 1024
+
+type archiveStagingWriter struct {
+	ctx       context.Context
+	out       io.Writer
+	remaining int64
+}
+
+func (w *archiveStagingWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if int64(len(p)) > w.remaining {
+		return 0, ErrArchiveTooLarge
+	}
+	n, err := w.out.Write(p)
+	w.remaining -= int64(n)
+	return n, err
+}
+
+// stageArchive prepares a complete ZIP on disk before committing the response.
+func stageArchive(ctx context.Context, out io.Writer, write func(io.Writer) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case archiveSlots <- struct{}{}:
+		defer func() { <-archiveSlots }()
+	default:
+		return ErrArchiveBusy
+	}
+	limit := conf.Server.MaxArchiveSizeBytes
+	if limit <= 0 {
+		limit = defaultMaxArchiveSizeBytes
+	}
+
 	f, err := os.CreateTemp("", "navidrome-archive-*.zip")
 	if err != nil {
 		return err
@@ -69,13 +112,16 @@ func stageArchive(out io.Writer, write func(io.Writer) error) error {
 		_ = f.Close()
 		_ = os.Remove(f.Name())
 	}()
-	if err := write(f); err != nil {
+	if err := write(&archiveStagingWriter{ctx: ctx, out: f, remaining: limit}); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	_, err = io.Copy(out, f)
+	_, err = io.Copy(&archiveStagingWriter{ctx: ctx, out: out, remaining: limit}, f)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrArchiveDelivery, err)
 	}
@@ -157,7 +203,7 @@ func (a *archiver) ZipShare(ctx context.Context, s *model.Share, out io.Writer) 
 		return model.ErrNotAuthorized
 	}
 	log.Debug(ctx, "Zipping share", "name", s.ID, "format", s.Format, "bitrate", s.MaxBitRate, "numTracks", len(s.Tracks))
-	return stageArchive(out, func(w io.Writer) error {
+	return stageArchive(ctx, out, func(w io.Writer) error {
 		return a.zipMediaFiles(ctx, s.ID, s.ID, s.Format, s.MaxBitRate, w, s.Tracks, false)
 	})
 }
@@ -170,7 +216,7 @@ func (a *archiver) ZipPlaylist(ctx context.Context, id string, format string, bi
 	}
 	mfs := pls.MediaFiles()
 	log.Debug(ctx, "Zipping playlist", "name", pls.Name, "format", format, "bitrate", bitrate, "numTracks", len(mfs))
-	return stageArchive(out, func(w io.Writer) error {
+	return stageArchive(ctx, out, func(w io.Writer) error {
 		return a.zipMediaFiles(ctx, id, pls.Name, format, bitrate, w, mfs, true)
 	})
 }
@@ -226,6 +272,9 @@ func (a *archiver) playlistFilename(mf model.MediaFile, format string, idx int) 
 }
 
 func (a *archiver) addFileToZip(ctx context.Context, z *zip.Writer, mf model.MediaFile, format string, bitrate int, filename string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := mf.AbsolutePath()
 
 	// Open the source before writing the zip entry header so a rejection
