@@ -103,7 +103,6 @@ func segmentArgs(opts TranscodeOptions) ([]string, error) {
 	}
 	// Never copy album-image track numbers, embedded CUE sheets or lyrics into
 	// individual downloads. Supply the virtual track's metadata instead.
-	args = injectBeforeOutput(args, "-map_metadata", "-1")
 	keys := make([]string, 0, len(seg.Tags))
 	for key := range seg.Tags {
 		keys = append(keys, key)

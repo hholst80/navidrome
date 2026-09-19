@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing/fstest"
 	"time"
 
@@ -113,11 +115,11 @@ var _ = Describe("Scanner", Ordered, func() {
 		return queued
 	}
 
-	It("refreshes sidecar CUE tracks when a sheet is edited, shortened, and removed", func() {
+	DescribeTable("refreshes sidecar CUE tracks when a sheet is edited, shortened, and removed", func(format string) {
 		conf.Server.Scanner.CUESheetSupport = true
 		album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album", "samplerate": 44100, "duration": 120})
-		fs := createFS(fstest.MapFS{"one/album.flac": album()})
-		sheet := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n"
+		fs := createFS(fstest.MapFS{"one/album." + format: album()})
+		sheet := fmt.Sprintf("FILE \"album.%s\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n", format)
 		update := func(text string, minute int) {
 			when := time.Now().Add(time.Duration(minute) * time.Minute)
 			fs.Add("one/album.cue", &fstest.MapFile{Data: []byte(text), ModTime: when}, when)
@@ -148,7 +150,52 @@ var _ = Describe("Scanner", Ordered, func() {
 		restored := active()
 		Expect(restored).To(HaveLen(1))
 		Expect(restored[0].CueTrack).To(BeZero())
-	})
+	}, Entry("FLAC", "flac"), Entry("APE", "ape"))
+
+	DescribeTable("imports existing APE CUE images on a full scan", func(mode string) {
+		sheet := "FILE \"album.ape\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:10\n" +
+			"  TRACK 02 AUDIO\n    TITLE \"Second\"\n    INDEX 00 00:01:05\n    INDEX 01 00:01:17\n"
+		album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album", "samplerate": 44100, "duration": 3})
+		files := fstest.MapFS{"one/album.ape": album()}
+		switch mode {
+		case "embedded":
+			files["one/album.ape"] = album(_t{"cuesheet": strings.ReplaceAll(sheet, "album.ape", "old-name.wav")})
+		case "duplicate":
+			files["one/album.cue"] = &fstest.MapFile{Data: []byte(sheet)}
+			files["one/album.ape.cue"] = &fstest.MapFile{Data: []byte(strings.ReplaceAll(sheet, "First", "Duplicate"))}
+		default:
+			files["one/"+mode] = &fstest.MapFile{Data: []byte(sheet)}
+		}
+		createFS(files)
+		active := func() model.MediaFiles {
+			tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}, Sort: "track_number"})
+			Expect(err).NotTo(HaveOccurred())
+			return tracks
+		}
+		Expect(runScanner(ctx, false)).To(Succeed())
+		Expect(active()).To(HaveLen(1))
+		Expect(active()[0].CueTrack).To(BeZero())
+		conf.Server.Scanner.CUESheetSupport = true
+		// Simulate a library indexed by the parent branch with CUE already enabled.
+		Expect(ds.Property(ctx).Put(consts.ScannerCUESheetSupportKey, "true")).To(Succeed())
+		Expect(runScanner(ctx, true)).To(Succeed())
+		tracks := active()
+		Expect(tracks).To(HaveLen(2))
+		Expect(tracks[0].Title).To(Equal("First"))
+		Expect(tracks[1].Title).To(Equal("Second"))
+		Expect(tracks[0].CueStartSample).To(BeZero())
+		Expect(tracks[0].CueEndSample).To(Equal(int64(92 * 588)))
+		Expect(tracks[1].CueStartSample).To(Equal(tracks[0].CueEndSample))
+		Expect(tracks[1].CueEndSample).To(BeZero())
+		Expect(runScanner(ctx, false)).To(Succeed())
+		Expect(active()).To(HaveLen(2))
+		Expect(active()[0].ID).To(Equal(tracks[0].ID))
+		conf.Server.Scanner.CUESheetSupport = false
+		Expect(runScanner(ctx, false)).To(Succeed())
+		Expect(active()).To(HaveLen(1))
+		Expect(active()[0].CueTrack).To(BeZero())
+	}, Entry("sidecar", "album.cue"), Entry("APE sidecar", "album.ape.cue"),
+		Entry("embedded text", "embedded"), Entry("duplicate sidecars", "duplicate"))
 
 	Context("CUE support setting changes", func() {
 		BeforeEach(func() {

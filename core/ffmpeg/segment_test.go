@@ -2,6 +2,7 @@ package ffmpeg
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,50 @@ var _ = Describe("CUE WAV extraction", func() {
 		_, err = segmentArgs(opts)
 		Expect(err).To(MatchError("custom transcoding commands are unsupported for CUE tracks"))
 	})
+})
+
+var _ = Describe("APE CUE sample preservation", func() {
+	DescribeTable("preserves source samples across boundaries and seeks", func(bits, rate int, checksum string) {
+		binary, err := ffmpegCmd()
+		Expect(err).NotTo(HaveOccurred())
+		ctx := GinkgoT().Context()
+		source := fmt.Sprintf("tests/fixtures/cue-ape/stereo-%d.ape", bits)
+		decode := func(name string) []byte {
+			pcm, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", name,
+				"-f", fmt.Sprintf("s%dle", bits), "-").Output()
+			Expect(err).NotTo(HaveOccurred())
+			return pcm
+		}
+		original := decode(source)
+		Expect(fmt.Sprintf("%x", sha256.Sum256(original))).To(Equal(checksum))
+		frameSize := 2 * (bits / 8)
+		Expect(original).To(HaveLen(3 * rate * frameSize))
+		boundary := int64(92 * (rate / 75))
+		for _, format := range []string{"flac", "wav"} {
+			extract := func(start, end int64, offset int) []byte {
+				stream, err := New().Transcode(ctx, TranscodeOptions{FilePath: source, Format: format,
+					Command: defaultCommands[format], BitDepth: bits, SampleRate: rate, Channels: 2,
+					Offset: offset, Segment: &AudioSegment{StartSample: start, EndSample: end, SourceRate: rate,
+						Tags: map[string]string{"title": "Extracted track"}}})
+				Expect(err).NotTo(HaveOccurred())
+				data, err := io.ReadAll(stream)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stream.Close()).To(Succeed())
+				name := filepath.Join(GinkgoT().TempDir(), "track."+format)
+				Expect(os.WriteFile(name, data, 0600)).To(Succeed())
+				tags, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", name, "-f", "ffmetadata", "-").Output()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(tags)).To(ContainSubstring("title=Extracted track"))
+				Expect(string(tags)).NotTo(ContainSubstring("CUESHEET"))
+				return decode(name)
+			}
+			first, last := extract(0, boundary, 0), extract(boundary, 0, 0)
+			Expect(first).To(Equal(original[:int(boundary)*frameSize]))
+			Expect(append(first, last...)).To(Equal(original))
+			Expect(extract(boundary, 0, 1)).To(Equal(original[(int(boundary)+rate)*frameSize:]))
+		}
+	}, Entry("16-bit stereo 44.1 kHz", 16, 44100, "23d363f881949499e25568fda5fd02d54c73a42b7cddb4ec45eaae874b166398"),
+		Entry("24-bit stereo 96 kHz", 24, 96000, "16dd91941379324cfcf105f751d27d6e1a52f4038d1586c0348a052c69ca5235"))
 })
 
 var _ = Describe("CUE sample preservation", func() {

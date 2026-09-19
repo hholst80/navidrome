@@ -244,6 +244,10 @@ func childFromMediaFile(ctx context.Context, mf model.MediaFile) responses.Child
 	}
 
 	format, _ := getTranscoding(ctx)
+	if mf.CueTrack > 0 && mf.Suffix == "ape" && (format == "" || format == "raw") {
+		// Original-quality playback extracts FLAC; original downloads keep APE.
+		format = "flac"
+	}
 	if mf.Suffix != "" && format != "" && mf.Suffix != format {
 		child.TranscodedSuffix = format
 		child.TranscodedContentType = mime.TypeByExtension("." + format)

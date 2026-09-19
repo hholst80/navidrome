@@ -46,9 +46,17 @@ var _ = Describe("CUE archive downloads", func() {
 			source := filepath.Join(dir, "album."+sourceFormat)
 			binary, err := exec.LookPath("ffmpeg")
 			Expect(err).NotTo(HaveOccurred())
-			output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
-				`aevalsrc=if(lt(t\,1)\,0.25\,-0.25):s=44100:d=2`, source).CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), string(output))
+			channels := 1
+			if sourceFormat == "ape" {
+				original, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.ape")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(os.WriteFile(source, original, 0600)).To(Succeed())
+				channels = 2
+			} else {
+				output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
+					`aevalsrc=if(lt(t\,1)\,0.25\,-0.25):s=44100:d=2`, source).CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(output))
+			}
 			tracks := model.MediaFiles{}
 			for i := range 2 {
 				disc := 1
@@ -58,7 +66,7 @@ var _ = Describe("CUE archive downloads", func() {
 				tracks = append(tracks, model.MediaFile{ID: fmt.Sprint(i), Path: source, Suffix: sourceFormat,
 					Album: "Album/Name", AlbumID: "album", Title: "Same/Title", DiscNumber: disc, TrackNumber: i + 1,
 					CueTrack: i + 1, CueStartSample: int64(i * 44100), CueEndSample: int64((i + 1) * 44100),
-					SampleRate: 44100, Channels: 1, Duration: 1})
+					SampleRate: 44100, Channels: channels, Duration: 1})
 			}
 			repo := &mockMediaFileRepository{}
 			repo.On("GetAll", mock.Anything).Return(tracks, nil)
@@ -85,6 +93,8 @@ var _ = Describe("CUE archive downloads", func() {
 				return
 			}
 			Expect(zr.File).To(HaveLen(2))
+			sourcePCM, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", source, "-f", "s16le", "-").Output()
+			Expect(err).NotTo(HaveOccurred())
 			ext := sourceFormat
 			if format != "" && format != "raw" {
 				ext = format
@@ -104,9 +114,8 @@ var _ = Describe("CUE archive downloads", func() {
 				Expect(os.WriteFile(file, data, 0o600)).To(Succeed())
 				pcm, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", file, "-f", "s16le", "-").Output()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(pcm).To(HaveLen(44100 * 2))
-				// The first second is positive DC, the second negative: verify content as well as length.
-				Expect(pcm[1] < 128).To(Equal(i == 0))
+				segmentSize := 44100 * channels * 2
+				Expect(pcm).To(Equal(sourcePCM[i*segmentSize : (i+1)*segmentSize]))
 			}
 		},
 		Entry("raw FLAC", "raw", "flac", false),
@@ -115,5 +124,8 @@ var _ = Describe("CUE archive downloads", func() {
 		Entry("converted WAV to FLAC", "flac", "wav", false),
 		Entry("converted FLAC", "flac", "flac", false),
 		Entry("multiple discs converted", "flac", "flac", true),
+		Entry("raw APE", "raw", "ape", false),
+		Entry("default APE", "", "ape", false),
+		Entry("APE converted to FLAC", "flac", "ape", false),
 	)
 })

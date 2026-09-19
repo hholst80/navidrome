@@ -3,6 +3,7 @@ package subsonic
 import (
 	"context"
 	"encoding/json"
+	"mime"
 	"net/http/httptest"
 	"time"
 
@@ -24,6 +25,20 @@ var _ = Describe("helpers", func() {
 		auth.TokenAuth = jwtauth.New("HS256", []byte("test secret"), nil)
 		auth.PublicTokenAuth = jwtauth.New("HS256", []byte("test public secret"), nil)
 	})
+
+	DescribeTable("reports the playback format of APE CUE tracks", func(cueTrack int, configured, expected string) {
+		ctx := context.Background()
+		if configured != "" {
+			ctx = request.WithTranscoding(ctx, model.Transcoding{TargetFormat: configured})
+		}
+		child := childFromMediaFile(ctx, model.MediaFile{Suffix: "ape", CueTrack: cueTrack})
+		Expect(child.Suffix).To(Equal("ape"))
+		Expect(child.TranscodedSuffix).To(Equal(expected))
+		if expected != "" {
+			Expect(child.TranscodedContentType).To(Equal(mime.TypeByExtension("." + expected)))
+		}
+	}, Entry("original quality", 1, "", "flac"), Entry("raw", 1, "raw", "flac"),
+		Entry("configured MP3", 1, "mp3", "mp3"), Entry("ordinary APE", 0, "", ""))
 
 	Describe("fakePath", func() {
 		var mf model.MediaFile

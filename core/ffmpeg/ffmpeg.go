@@ -485,7 +485,13 @@ func buildDynamicArgs(opts TranscodeOptions) []string {
 	// levels. Targeting the audio stream explicitly (s:a:0 rather than s:0) avoids
 	// pulling metadata from an embedded cover-art/video stream at index 0. Note:
 	// adts (AAC) output cannot hold tags, so these are a no-op there.
-	args = append(args, "-map_metadata", "0", "-map_metadata", "0:s:a:0")
+	if opts.Segment == nil {
+		args = append(args, "-map_metadata", "0", "-map_metadata", "0:s:a:0")
+	} else {
+		// CUE tracks supply their own tags. A later -map_metadata -1 does not
+		// undo explicit source mappings, so omit those mappings entirely.
+		args = append(args, "-map_metadata", "-1", "-map_metadata:s:a", "-1")
+	}
 
 	if codec, ok := formatCodecMap[opts.Format]; ok {
 		args = append(args, "-c:a", codec)

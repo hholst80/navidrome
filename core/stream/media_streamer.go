@@ -95,6 +95,10 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 		// Raw means original quality. A CUE track needs a standalone lossless
 		// container rather than the full source file or an arbitrary byte slice.
 		format = mf.Suffix
+		if format == "ape" {
+			// FFmpeg decodes APE but cannot encode standalone APE tracks.
+			format = "flac"
+		}
 		if format != "flac" && format != "wav" {
 			return nil, fmt.Errorf("unsupported CUE source format: %s", format)
 		}
