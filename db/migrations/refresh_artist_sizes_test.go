@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/navidrome/navidrome/consts"
 	. "github.com/onsi/ginkgo/v2"
@@ -16,8 +17,8 @@ var _ = Describe("upRefreshArtistSizes", func() {
 		DeferCleanup(func() { _ = db.Close() })
 		_, err = db.Exec(`
    CREATE TABLE property (id text primary key, value text);
-   CREATE TABLE library (id integer primary key, full_scan_in_progress boolean);
-   INSERT INTO library VALUES (1, false), (2, false);
+   CREATE TABLE library (id integer primary key, full_scan_in_progress boolean, last_scan_started_at datetime);
+   INSERT INTO library VALUES (1, false, '0001-01-01 00:00:00+00:00'), (2, false, '0001-01-01 00:00:00+00:00');
   `)
 		Expect(err).ToNot(HaveOccurred())
 		tx, err := db.Begin()
@@ -32,6 +33,9 @@ var _ = Describe("upRefreshArtistSizes", func() {
 		Expect(err).ToNot(HaveOccurred())
 		var pending int
 		Expect(tx.QueryRowContext(context.Background(), "SELECT count(*) FROM library WHERE full_scan_in_progress = true").Scan(&pending)).To(Succeed())
+		Expect(pending).To(Equal(2))
+		// Library.ScanInProgress uses this timestamp predicate to trigger startup recovery.
+		Expect(tx.QueryRowContext(context.Background(), "SELECT count(*) FROM library WHERE last_scan_started_at <> ?", time.Time{}).Scan(&pending)).To(Succeed())
 		Expect(pending).To(Equal(2))
 	})
 })
