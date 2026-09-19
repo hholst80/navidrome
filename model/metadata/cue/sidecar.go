@@ -34,7 +34,7 @@ type Sidecar struct {
 // OriginalSidecar uses the scanner's source matching and basename preference.
 // Embedded-only images have no external original. Candidate failures are skipped
 // just as during scanning; directory-level failures are returned to the caller.
-func OriginalSidecar(source string, followSymlinks bool) (*Sidecar, error) {
+func OriginalSidecar(source string, followSymlinks bool, isAudio func(string) bool) (*Sidecar, error) {
 	dir, base := filepath.Dir(source), filepath.Base(source)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -60,8 +60,10 @@ func OriginalSidecar(source string, followSymlinks bool) (*Sidecar, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		files[name] = entry
-		if strings.EqualFold(filepath.Ext(resolvedName), ".cue") {
+		if isAudio(resolvedName) {
+			files[name] = entry
+		}
+		if strings.EqualFold(filepath.Ext(resolvedName), ".cue") && !strings.ContainsAny(name, "/\\:") {
 			sheets = append(sheets, name)
 		}
 	}

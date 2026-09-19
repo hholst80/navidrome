@@ -177,7 +177,7 @@ func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
 }
 
 func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
-	sidecar, err := cue.OriginalSidecar(mf.AbsolutePath(), conf.Server.Scanner.FollowSymlinks)
+	sidecar, err := cue.OriginalSidecar(mf.AbsolutePath(), conf.Server.Scanner.FollowSymlinks, model.IsAudioFile)
 	if err != nil {
 		return err
 	}

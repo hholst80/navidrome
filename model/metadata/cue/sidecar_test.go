@@ -1,6 +1,8 @@
-package cue
+package cue_test
 
 import (
+	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata/cue"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +19,7 @@ func TestOriginalSidecar(t *testing.T) {
 		{"prefer basename", map[string]string{"album.cue": "album.ape", "album.ape.cue": "album.ape"}, "album.cue"},
 		{"case fallback", map[string]string{"album.cue": "ALBUM.APE"}, "album.cue"},
 		{"unrelated sheet", map[string]string{"other.cue": "other.ape"}, ""},
+		{"reject sidecar traversal", map[string]string{`..\outside.cue`: "album.ape"}, ""},
 		{"reject traversal", map[string]string{"album.cue": "../album.ape"}, ""},
 		{"ambiguous case", map[string]string{"album.cue": "ALBUM.APE", "Album.ape": ""}, ""},
 		{"prefer exact source", map[string]string{"album.cue": "album.ape", "Album.ape": ""}, "album.cue"},
@@ -33,7 +36,7 @@ func TestOriginalSidecar(t *testing.T) {
 			for name, ref := range tc.files {
 				write(name, "FILE \""+ref+"\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n")
 			}
-			got, err := OriginalSidecar(filepath.Join(dir, "album.ape"), false)
+			got, err := cue.OriginalSidecar(filepath.Join(dir, "album.ape"), false, model.IsAudioFile)
 			name := ""
 			if got != nil {
 				name = got.Name
@@ -52,7 +55,7 @@ func TestOriginalSidecarSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "external.cue")
-	if err := os.WriteFile(target, []byte("FILE \"album.ape\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"), 0600); err != nil {
+	if err := os.WriteFile(target, []byte("FILE \"ALBUM.APE\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// Scanning classifies symlinks by the target extension, even when the link
@@ -63,15 +66,22 @@ func TestOriginalSidecarSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, "000-broken.cue")); err != nil {
 		t.Fatal(err)
 	}
+	note := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(note, []byte("not audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(note, filepath.Join(dir, "Album.ape")); err != nil {
+		t.Fatal(err)
+	}
 	for _, follow := range []bool{false, true} {
-		got, err := OriginalSidecar(source, follow)
+		got, err := cue.OriginalSidecar(source, follow, model.IsAudioFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !follow && got != nil {
 			t.Fatalf("symlink following disabled: %+v", got)
 		}
-		if follow && (got == nil || got.Name != "sheet-link" || got.SourceName != "album.ape") {
+		if follow && (got == nil || got.Name != "sheet-link" || got.SourceName != "ALBUM.APE") {
 			t.Fatalf("missing linked sheet: %+v", got)
 		}
 	}

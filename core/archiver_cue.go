@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +30,15 @@ func ZipOriginalCUE(ctx context.Context, mf *model.MediaFile, sidecar *cue.Sidec
 }
 
 func addOriginalCUEFile(z *zip.Writer, dir, name, archiveName string) error {
+	archiveName = filepath.ToSlash(archiveName)
+	if archiveName == "." || path.IsAbs(archiveName) || path.Clean(archiveName) != archiveName || strings.ContainsAny(archiveName, "\\:") {
+		return fmt.Errorf("unsafe original CUE archive name %q", archiveName)
+	}
+	for _, part := range strings.Split(archiveName, "/") {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("unsafe original CUE archive name %q", archiveName)
+		}
+	}
 	// These names come from the indexed source and selected sidecar, not the request.
 	// Follow file symlinks as allowed by scanning, including targets outside this folder.
 	f, err := os.Open(filepath.Join(dir, name))

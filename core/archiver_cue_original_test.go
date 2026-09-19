@@ -1,6 +1,7 @@
 package core
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"os"
@@ -32,5 +33,23 @@ func TestOriginalCUEMissingSidecarDoesNotDeliverPartialArchive(t *testing.T) {
 	err := ZipOriginalCUE(context.Background(), &model.MediaFile{Path: source}, &cue.Sidecar{Name: "missing.cue", SourceName: "image.ape"}, &out)
 	if err == nil || out.Len() != 0 {
 		t.Fatalf("missing sheet must fail before delivery: err=%v, bytes=%d", err, out.Len())
+	}
+}
+
+func TestOriginalCUERejectsUnsafeArchivePaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "image.ape"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../outside.cue", `..\outside.cue`, "/absolute.cue", "Album/../outside.cue", "Album//sheet.cue", "Album/./sheet.cue", "C:outside.cue"} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			z := zip.NewWriter(&out)
+			err := addOriginalCUEFile(z, dir, "image.ape", name)
+			_ = z.Close()
+			if err == nil {
+				t.Fatalf("accepted unsafe archive path %q", name)
+			}
+		})
 	}
 }
