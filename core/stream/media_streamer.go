@@ -186,7 +186,10 @@ func (s *Stream) Serve(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Content-Type", s.ContentType())
 
-	if req.Params(r).BoolOr("estimateContentLength", false) {
+	// CUE extraction has no reliable bitrate-derived size, even when the
+	// request supplies a bitrate. Stream until EOF; cached files use their
+	// exact size above. A zero bitrate also means no usable estimate.
+	if s.mf.CueTrack == 0 && s.bitRate > 0 && req.Params(r).BoolOr("estimateContentLength", false) {
 		length := strconv.Itoa(s.EstimatedContentLength())
 		log.Trace(ctx, "Estimated content-length", "contentLength", length)
 		w.Header().Set("Content-Length", length)
