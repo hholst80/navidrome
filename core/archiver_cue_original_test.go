@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata/cue"
 )
 
 func TestOriginalCUEArchiveCollision(t *testing.T) {
@@ -28,7 +29,7 @@ func TestOriginalCUEMissingSidecarDoesNotDeliverPartialArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := ZipOriginalCUE(context.Background(), &model.MediaFile{Path: source}, "missing.cue", &out)
+	err := ZipOriginalCUE(context.Background(), &model.MediaFile{Path: source}, &cue.Sidecar{Name: "missing.cue", SourceName: "image.ape"}, &out)
 	if err == nil || out.Len() != 0 {
 		t.Fatalf("missing sheet must fail before delivery: err=%v, bytes=%d", err, out.Len())
 	}

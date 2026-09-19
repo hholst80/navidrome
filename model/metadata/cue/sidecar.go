@@ -25,47 +25,65 @@ func ResolveSourceName(name string, files map[string]fs.DirEntry) (string, error
 	return matched, nil
 }
 
-// OriginalSidecar finds the external sheet for an image using the scanner's
-// basename preference and source matching. It never rewrites the sheet.
-// An embedded-only image has no external original to return.
-func OriginalSidecar(source string) (string, error) {
+// Sidecar identifies the selected external sheet and its original FILE spelling.
+type Sidecar struct {
+	Name       string
+	SourceName string
+}
+
+// OriginalSidecar uses the scanner's source matching and basename preference.
+// Embedded-only images have no external original. Candidate failures are skipped
+// just as during scanning; directory-level failures are returned to the caller.
+func OriginalSidecar(source string, followSymlinks bool) (*Sidecar, error) {
 	dir, base := filepath.Dir(source), filepath.Base(source)
-	entries, err := os.ReadDir(dir) // Sorted: lexical order breaks ties.
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
 	files := map[string]fs.DirEntry{}
+	sheets := []string{}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			files[entry.Name()] = entry
+		name := entry.Name()
+		full := filepath.Join(dir, name)
+		resolvedName := name
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if !followSymlinks {
+				continue
+			}
+			resolved, err := filepath.EvalSymlinks(full)
+			if err != nil {
+				continue
+			}
+			resolvedName = filepath.Base(resolved)
+		}
+		info, err := os.Stat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		files[name] = entry
+		if strings.EqualFold(filepath.Ext(resolvedName), ".cue") {
+			sheets = append(sheets, name)
 		}
 	}
 	preferred := strings.TrimSuffix(base, filepath.Ext(base)) + ".cue"
-	var chosen string
-	for _, entry := range entries {
-		if !strings.EqualFold(filepath.Ext(entry.Name()), ".cue") || !entry.Type().IsRegular() {
-			continue
-		}
-		f, err := root.Open(entry.Name())
+	var chosen *Sidecar
+	for _, name := range sheets {
+		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
-			return "", err
+			continue
 		}
 		sheet, err := ReadCue(f)
 		_ = f.Close()
 		if err != nil || len(sheet.File) != 1 || strings.ContainsAny(sheet.File[0].FileName, "/\\") {
 			continue
 		}
-		resolved, err := ResolveSourceName(sheet.File[0].FileName, files)
+		ref := sheet.File[0].FileName
+		resolved, err := ResolveSourceName(ref, files)
 		if err != nil || resolved != base {
 			continue
 		}
-		if chosen == "" || entry.Name() == preferred {
-			chosen = entry.Name()
+		if chosen == nil || name == preferred {
+			chosen = &Sidecar{Name: name, SourceName: ref}
 		}
 	}
 	return chosen, nil

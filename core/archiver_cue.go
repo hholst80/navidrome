@@ -10,15 +10,16 @@ import (
 	"strings"
 
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata/cue"
 )
 
 // ZipOriginalCUE packages the original image and external sheet without changing
 // either file. It uses the same staging limits as other archive downloads.
-func ZipOriginalCUE(ctx context.Context, mf *model.MediaFile, sidecar string, out io.Writer) error {
+func ZipOriginalCUE(ctx context.Context, mf *model.MediaFile, sidecar *cue.Sidecar, out io.Writer) error {
 	return stageArchive(ctx, out, func(w io.Writer) error {
 		z := createZipWriter(w, "raw", 0)
-		for _, name := range []string{filepath.Base(mf.AbsolutePath()), sidecar} {
-			if err := addOriginalCUEFile(z, filepath.Dir(mf.AbsolutePath()), name, name); err != nil {
+		for _, entry := range []struct{ source, name string }{{filepath.Base(mf.AbsolutePath()), sidecar.SourceName}, {sidecar.Name, sidecar.Name}} {
+			if err := addOriginalCUEFile(z, filepath.Dir(mf.AbsolutePath()), entry.source, entry.name); err != nil {
 				_ = z.Close()
 				return err
 			}
@@ -28,12 +29,9 @@ func ZipOriginalCUE(ctx context.Context, mf *model.MediaFile, sidecar string, ou
 }
 
 func addOriginalCUEFile(z *zip.Writer, dir, name, archiveName string) error {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	f, err := root.Open(name)
+	// These names come from the indexed source and selected sidecar, not the request.
+	// Follow file symlinks as allowed by scanning, including targets outside this folder.
+	f, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
 		return err
 	}
@@ -53,8 +51,7 @@ func addOriginalCUEFile(z *zip.Writer, dir, name, archiveName string) error {
 	return err
 }
 
-// Keep both basenames intact: renaming the image would break the unchanged CUE
-// FILE reference. Resolve collisions by moving the pair into another directory.
+// Keep the CUE basename and its FILE reference intact. Resolve collisions by moving the pair into another directory.
 func originalCUEArchiveNames(image, sidecar string, used map[string]bool) (string, string) {
 	dir, base := filepath.Dir(image), filepath.Base(image)
 	candidate := dir

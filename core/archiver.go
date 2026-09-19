@@ -148,7 +148,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Debug(ctx, "Zipping album", "name", album[0].Album, "artist", album[0].AlbumArtist,
 			"format", format, "bitrate", bitrate, "isMultiDisc", isMultiDisc, "numTracks", len(album))
 		for _, mf := range album {
-			var sidecar string
+			var sidecar *cue.Sidecar
 			if format == "raw" || format == "" {
 				source := mf.AbsolutePath()
 				if usedSources[source] {
@@ -156,7 +156,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 				}
 				usedSources[source] = true
 				if mf.CueTrack > 0 {
-					sidecar, err = cue.OriginalSidecar(source)
+					sidecar, err = cue.OriginalSidecar(source, conf.Server.Scanner.FollowSymlinks)
 					if err != nil {
 						_ = z.Close()
 						return err
@@ -166,9 +166,9 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 				mf.CueTrack = 0
 			}
 			file := a.albumFilename(mf, format, isMultiDisc)
-			if sidecar != "" {
-				imageName, cueName := originalCUEArchiveNames(file, sidecar, usedNames)
-				for _, entry := range []struct{ source, name string }{{filepath.Base(mf.AbsolutePath()), imageName}, {sidecar, cueName}} {
+			if sidecar != nil {
+				imageName, cueName := originalCUEArchiveNames(filepath.Join(filepath.Dir(file), sidecar.SourceName), sidecar.Name, usedNames)
+				for _, entry := range []struct{ source, name string }{{filepath.Base(mf.AbsolutePath()), imageName}, {sidecar.Name, cueName}} {
 					if err := addOriginalCUEFile(z, filepath.Dir(mf.AbsolutePath()), entry.source, entry.name); err != nil {
 						_ = z.Close()
 						return err

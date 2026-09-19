@@ -93,7 +93,7 @@ var _ = Describe("CUE original downloads", func() {
 		Entry("original APE album", "album", "raw", "ape", true), Entry("default APE album", "album", "", "ape", true),
 		Entry("original APE track", "track1", "raw", "ape", true), Entry("converted APE album", "album", "flac", "ape", false))
 
-	DescribeTable("preserves original APE and CUE hashes and exports clean FLAC splits", func(bits int, id, format, cueSuffix string) {
+	DescribeTable("preserves original APE and CUE hashes and exports clean FLAC splits", func(bits int, id, format, cueSuffix, mode string) {
 		DeferCleanup(configtest.SetupConfig())
 		conf.Server.EnableDownloads = true
 		conf.Server.AutoTranscodeDownload = false
@@ -116,6 +116,20 @@ var _ = Describe("CUE original downloads", func() {
 		if cueSuffix == ".cue" {
 			Expect(os.WriteFile(filepath.Join(dir, base+".ape.cue"), original[base+".cue"], 0600)).To(Succeed())
 		}
+		conf.Server.Scanner.FollowSymlinks = true
+		sourcePath := filepath.Join(dir, base+".ape")
+		if mode == "case" {
+			physical := filepath.Join(dir, base+".APE")
+			Expect(os.Rename(sourcePath, physical)).To(Succeed())
+			sourcePath = physical
+		}
+		if mode == "symlink" {
+			sheet := filepath.Join(dir, base+cueSuffix)
+			target := filepath.Join(GinkgoT().TempDir(), "source.cue")
+			Expect(os.Rename(sheet, target)).To(Succeed())
+			Expect(os.Symlink(target, sheet)).To(Succeed())
+			Expect(os.Symlink(filepath.Join(dir, "missing.cue"), filepath.Join(dir, "000-broken.cue"))).To(Succeed())
+		}
 		rate := 44100
 		if bits == 24 {
 			rate = 96000
@@ -123,8 +137,8 @@ var _ = Describe("CUE original downloads", func() {
 		boundary := int64(92 * (rate / 75))
 		repo := &tests.MockMediaFileRepo{}
 		repo.SetData(model.MediaFiles{
-			{ID: "track1", AlbumID: "album", Album: "Album", Path: filepath.Join(dir, base+".ape"), Suffix: "ape", Title: "First", CueTrack: 1, CueEndSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 92.0 / 75},
-			{ID: "track2", AlbumID: "album", Album: "Album", Path: filepath.Join(dir, base+".ape"), Suffix: "ape", Title: "Second", CueTrack: 2, CueStartSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 3 - 92.0/75},
+			{ID: "track1", AlbumID: "album", Album: "Album", Path: sourcePath, Suffix: "ape", Title: "First", CueTrack: 1, CueEndSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 92.0 / 75},
+			{ID: "track2", AlbumID: "album", Album: "Album", Path: sourcePath, Suffix: "ape", Title: "Second", CueTrack: 2, CueStartSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 3 - 92.0/75},
 		})
 		albums := tests.CreateMockAlbumRepo()
 		albums.SetData(model.Albums{{ID: "album", Name: "Album"}})
@@ -174,9 +188,12 @@ var _ = Describe("CUE original downloads", func() {
 			Expect(sha256.Sum256(combinedPCM)).To(Equal(sha256.Sum256(pcm)))
 			fmt.Fprintf(GinkgoWriter, "SHA256 %d-bit decoded original PCM %x = concatenated FLAC PCM %x; no CUE files or CUESHEET tags\n", bits, sha256.Sum256(pcm), sha256.Sum256(combinedPCM))
 		}
-	}, Entry("16-bit raw album", 16, "album", "raw", ".cue"), Entry("24-bit default album", 24, "album", "", ".cue"),
-		Entry("16-bit raw track with .ape.cue", 16, "track1", "raw", ".ape.cue"), Entry("24-bit raw track", 24, "track1", "raw", ".cue"),
-		Entry("16-bit FLAC album", 16, "album", "flac", ".cue"), Entry("24-bit FLAC album", 24, "album", "flac", ".cue"))
+	}, Entry("16-bit raw album", 16, "album", "raw", ".cue", ""), Entry("24-bit default album", 24, "album", "", ".cue", ""),
+		Entry("16-bit raw track with .ape.cue", 16, "track1", "raw", ".ape.cue", ""), Entry("24-bit raw track", 24, "track1", "raw", ".cue", ""),
+		Entry("16-bit FLAC album", 16, "album", "flac", ".cue", ""), Entry("24-bit FLAC album", 24, "album", "flac", ".cue", ""),
+		Entry("case mismatch original album", 16, "album", "raw", ".cue", "case"),
+		Entry("case mismatch original track", 24, "track1", "raw", ".cue", "case"),
+		Entry("symlinked sheet with unrelated broken link", 16, "album", "raw", ".cue", "symlink"))
 
 	It("downloads a converted APE CUE track with a FLAC filename and content type", func() {
 		DeferCleanup(configtest.SetupConfig())

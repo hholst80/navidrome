@@ -106,6 +106,7 @@ var _ = Describe("CUE archive downloads", func() {
 			Expect(err).NotTo(HaveOccurred())
 			channels := 1
 			if sourceFormat == "ape" {
+				source = filepath.Join(dir, "album.APE")
 				original, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.ape")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(os.WriteFile(source, original, 0600)).To(Succeed())
