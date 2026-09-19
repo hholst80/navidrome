@@ -29,7 +29,7 @@ func buildLegacyClientInfo(mf *model.MediaFile, reqFormat string, reqBitRate int
 	}
 	if targetFormat == "" && mf.CueTrack > 0 && strings.EqualFold(mf.Suffix, "ape") {
 		// Unconstrained legacy playback means original quality, served as FLAC.
-		targetFormat = "flac"
+		targetFormat = OutputFormat(mf, "raw")
 	}
 
 	if targetFormat != "" {

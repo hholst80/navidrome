@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"fmt"
+	"io/fs"
 	"maps"
 	"path"
 	"slices"
@@ -48,9 +49,16 @@ func (p *phaseFolders) cueSources(entry *folderEntry) map[string]cueSource {
 			p.cueWarning(name, fmt.Errorf("CUE FILE must stay in the same directory"))
 			continue
 		}
-		if _, ok := entry.audioFiles[source]; !ok {
+		source, err = cueSourceName(source, entry.audioFiles)
+		if err != nil {
+			p.cueWarning(name, err)
 			continue
 		}
+		if source == "" {
+			continue
+		}
+		// Keep the physical spelling for file access and CUETracks validation.
+		sheet.File[0].FileName = source
 		fullPath := path.Join(entry.path, source)
 		// Prefer the matching basename, then lexical order. This also handles old
 		// duplicate .ape.cue sidecars left behind after conversion to FLAC.
@@ -66,6 +74,22 @@ func (p *phaseFolders) cueSources(entry *folderEntry) map[string]cueSource {
 		sources[fullPath] = cueSource{sheet, info.ModTime(), name}
 	}
 	return sources
+}
+
+func cueSourceName(name string, files map[string]fs.DirEntry) (string, error) {
+	if _, ok := files[name]; ok {
+		return name, nil
+	}
+	var matched string
+	for candidate := range files {
+		if strings.EqualFold(candidate, name) {
+			if matched != "" {
+				return "", fmt.Errorf("CUE FILE %q matches multiple audio files ignoring case", name)
+			}
+			matched = candidate
+		}
+	}
+	return matched, nil
 }
 
 func (p *phaseFolders) cueWarning(name string, err error) {

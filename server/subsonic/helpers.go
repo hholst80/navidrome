@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/core/publicurl"
+	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server/subsonic/responses"
@@ -244,9 +245,9 @@ func childFromMediaFile(ctx context.Context, mf model.MediaFile) responses.Child
 	}
 
 	format, _ := getTranscoding(ctx)
-	if mf.CueTrack > 0 && mf.Suffix == "ape" && (format == "" || format == "raw") {
-		// Original-quality playback extracts FLAC; original downloads keep APE.
-		format = "flac"
+	if mf.CueTrack > 0 {
+		// Report the playback container; original downloads retain the source.
+		format = stream.OutputFormat(&mf, format)
 	}
 	if mf.Suffix != "" && format != "" && mf.Suffix != format {
 		child.TranscodedSuffix = format

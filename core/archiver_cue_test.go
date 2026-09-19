@@ -36,6 +36,62 @@ func (cueArchiveTranscodingRepo) FindByFormat(format string) (*model.Transcoding
 }
 
 var _ = Describe("CUE archive downloads", func() {
+	DescribeTable("names APE CUE playlist and share entries after the streamed format", func(kind, format string) {
+		DeferCleanup(configtest.SetupConfig())
+		ctx := GinkgoT().Context()
+		conf.Server.CacheFolder = conf.NewDir(GinkgoT().TempDir())
+		conf.Server.TranscodingCacheSize = "10MB"
+		name, err := filepath.Abs("tests/fixtures/cue-ape/stereo-24.ape")
+		Expect(err).NotTo(HaveOccurred())
+		original, err := os.ReadFile(name)
+		Expect(err).NotTo(HaveOccurred())
+		tracks := model.MediaFiles{
+			{ID: "original", Path: name, Suffix: "ape", Artist: "Artist", Title: "Image"},
+			{ID: "first", Path: name, Suffix: "ape", Artist: "Artist", Title: "First", CueTrack: 1,
+				CueEndSample: 117760, SampleRate: 96000, Channels: 2, BitDepth: new(24), Duration: 92.0 / 75},
+			{ID: "second", Path: name, Suffix: "ape", Artist: "Artist", Title: "Second", CueTrack: 2,
+				CueStartSample: 117760, SampleRate: 96000, Channels: 2, BitDepth: new(24), Duration: 3 - 92.0/75},
+		}
+		ds := &mockDataStore{DataStore: &tests.MockDataStore{MockedTranscoding: cueArchiveTranscodingRepo{}}}
+		cache := stream.NewTranscodingCache()
+		Eventually(func() bool { return cache.Available(ctx) }, 10*time.Second).Should(BeTrue())
+		arch := core.NewArchiver(stream.NewMediaStreamer(ds, ffmpeg.New(), cache), ds, nil)
+		var out bytes.Buffer
+		if kind == "playlist" {
+			repo := &mockPlaylistRepository{}
+			repo.On("GetWithTracks", "list", true, false).Return(&model.Playlist{ID: "list", Name: "List",
+				Tracks: []model.PlaylistTrack{{MediaFile: tracks[0]}, {MediaFile: tracks[1]}, {MediaFile: tracks[2]}}}, nil)
+			ds.On("Playlist", mock.Anything).Return(repo)
+			Expect(arch.ZipPlaylist(ctx, "list", format, 0, &out)).To(Succeed())
+		} else {
+			Expect(arch.ZipShare(ctx, &model.Share{ID: "share", Downloadable: true, Format: format, Tracks: tracks}, &out)).To(Succeed())
+		}
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		entries := map[string][]byte{}
+		for _, entry := range zr.File {
+			r, err := entry.Open()
+			Expect(err).NotTo(HaveOccurred())
+			entries[entry.Name], err = io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Close()).To(Succeed())
+		}
+		Expect(entries["01 - Artist - Image.ape"]).To(Equal(original))
+		for _, filename := range []string{"02 - Artist - First.flac", "03 - Artist - Second.flac"} {
+			Expect(string(entries[filename])).To(HavePrefix("fLaC"))
+			if kind == "playlist" {
+				Expect(string(entries["List.m3u"])).To(ContainSubstring("\n" + filename + "\n"))
+			}
+		}
+		if kind == "playlist" {
+			Expect(entries).To(HaveLen(4))
+			Expect(string(entries["List.m3u"])).To(ContainSubstring("\n01 - Artist - Image.ape\n"))
+		} else {
+			Expect(entries).To(HaveLen(3))
+		}
+	}, Entry("raw playlist", "playlist", "raw"), Entry("default playlist", "playlist", ""),
+		Entry("raw public share", "share", "raw"), Entry("default public share", "share", ""))
+
 	DescribeTable("exports distinct audio segments with unique names",
 		func(format, sourceFormat string, multiDisc bool) {
 			DeferCleanup(configtest.SetupConfig())
