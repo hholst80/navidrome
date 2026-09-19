@@ -164,3 +164,9 @@ func (ic *IgnoreChecker) compilePatterns() {
 
 // New creates an ignore checker shared by scanning and original downloads.
 func New(fsys fs.FS) *IgnoreChecker { return newIgnoreChecker(fsys) }
+
+// IsDotEntry identifies hidden names with exactly one leading dot. Names such
+// as ..image.ape and ...Album are ordinary names under the scanner's policy.
+func IsDotEntry(name string) bool {
+	return name != "." && strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "..")
+}

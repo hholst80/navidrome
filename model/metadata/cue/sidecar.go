@@ -2,6 +2,7 @@ package cue
 
 import (
 	"fmt"
+	"github.com/navidrome/navidrome/utils/scanignore"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func OriginalSidecar(source string, followSymlinks bool, isAudio func(string) bo
 	sheets := []string{}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") || (ignored != nil && ignored(name)) {
+		if scanignore.IsDotEntry(name) || (ignored != nil && ignored(name)) {
 			continue
 		}
 		full := filepath.Join(dir, name)

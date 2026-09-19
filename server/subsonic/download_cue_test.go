@@ -101,10 +101,17 @@ var _ = Describe("CUE original downloads", func() {
 		conf.Server.TranscodingCacheSize = "10MB"
 		dir := GinkgoT().TempDir()
 		base := fmt.Sprintf("stereo-%d", bits)
+		fixtureBase := base
+		if mode == "dots" {
+			base = ".." + base
+		}
 		original := map[string][]byte{}
 		for _, ext := range []string{".ape", ".cue"} {
-			data, err := os.ReadFile("tests/fixtures/cue-ape/" + base + ext)
+			data, err := os.ReadFile("tests/fixtures/cue-ape/" + fixtureBase + ext)
 			Expect(err).NotTo(HaveOccurred())
+			if mode == "dots" && ext == ".cue" {
+				data = []byte(strings.ReplaceAll(string(data), fixtureBase+".ape", base+".ape"))
+			}
 			name := base + ext
 			if ext == ".cue" {
 				name = base + cueSuffix
@@ -200,7 +207,8 @@ var _ = Describe("CUE original downloads", func() {
 		Entry("case mismatch original album", 16, "album", "raw", ".cue", "case"),
 		Entry("case mismatch original track", 24, "track1", "raw", ".cue", "case"),
 		Entry("symlinked sheet with unrelated broken link", 16, "album", "raw", ".cue", "symlink"),
-		Entry("ignored preferred and hidden sheets", 16, "album", "raw", ".ape.cue", "ignored"))
+		Entry("ignored preferred and hidden sheets", 16, "album", "raw", ".ape.cue", "ignored"),
+		Entry("double-dot image and sheet names", 16, "album", "raw", ".cue", "dots"))
 
 	It("downloads a converted APE CUE track with a FLAC filename and content type", func() {
 		DeferCleanup(configtest.SetupConfig())
