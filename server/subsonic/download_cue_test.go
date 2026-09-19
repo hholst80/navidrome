@@ -1,14 +1,20 @@
 package subsonic
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"github.com/Masterminds/squirrel"
 	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/navidrome/navidrome/conf"
@@ -86,6 +92,91 @@ var _ = Describe("CUE original downloads", func() {
 		Entry("original track", "track1", "raw", "flac", true), Entry("converted FLAC album", "album", "flac", "flac", false),
 		Entry("original APE album", "album", "raw", "ape", true), Entry("default APE album", "album", "", "ape", true),
 		Entry("original APE track", "track1", "raw", "ape", true), Entry("converted APE album", "album", "flac", "ape", false))
+
+	DescribeTable("preserves original APE and CUE hashes and exports clean FLAC splits", func(bits int, id, format, cueSuffix string) {
+		DeferCleanup(configtest.SetupConfig())
+		conf.Server.EnableDownloads = true
+		conf.Server.AutoTranscodeDownload = false
+		conf.Server.CacheFolder = conf.NewDir(GinkgoT().TempDir())
+		conf.Server.TranscodingCacheSize = "10MB"
+		dir := GinkgoT().TempDir()
+		base := fmt.Sprintf("stereo-%d", bits)
+		original := map[string][]byte{}
+		for _, ext := range []string{".ape", ".cue"} {
+			data, err := os.ReadFile("tests/fixtures/cue-ape/" + base + ext)
+			Expect(err).NotTo(HaveOccurred())
+			name := base + ext
+			if ext == ".cue" {
+				name = base + cueSuffix
+			}
+			original[name] = data
+			Expect(os.WriteFile(filepath.Join(dir, name), data, 0600)).To(Succeed())
+		}
+		// The canonical sidecar wins over a duplicate .ape.cue.
+		if cueSuffix == ".cue" {
+			Expect(os.WriteFile(filepath.Join(dir, base+".ape.cue"), original[base+".cue"], 0600)).To(Succeed())
+		}
+		rate := 44100
+		if bits == 24 {
+			rate = 96000
+		}
+		boundary := int64(92 * (rate / 75))
+		repo := &tests.MockMediaFileRepo{}
+		repo.SetData(model.MediaFiles{
+			{ID: "track1", AlbumID: "album", Album: "Album", Path: filepath.Join(dir, base+".ape"), Suffix: "ape", Title: "First", CueTrack: 1, CueEndSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 92.0 / 75},
+			{ID: "track2", AlbumID: "album", Album: "Album", Path: filepath.Join(dir, base+".ape"), Suffix: "ape", Title: "Second", CueTrack: 2, CueStartSample: boundary, SampleRate: rate, Channels: 2, BitDepth: new(bits), Duration: 3 - 92.0/75},
+		})
+		albums := tests.CreateMockAlbumRepo()
+		albums.SetData(model.Albums{{ID: "album", Name: "Album"}})
+		ds := &tests.MockDataStore{MockedMediaFile: repo, MockedAlbum: albums, MockedTranscoding: cueDownloadTranscodingRepo{}}
+		ff := ffmpeg.New()
+		cache := stream.NewTranscodingCache()
+		Eventually(func() bool { return cache.Available(GinkgoT().Context()) }, 10*time.Second).Should(BeTrue())
+		ms := stream.NewMediaStreamer(ds, ff, cache)
+		router := &Router{ds: ds, archiver: core.NewArchiver(ms, ds, nil), streamer: ms, transcodeDecision: stream.NewTranscodeDecider(ds, ff)}
+		w := httptest.NewRecorder()
+		_, err := router.Download(w, newGetRequest("id="+id+"&format="+format))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(w.Header().Get("Content-Type")).To(Equal("application/zip"))
+		zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zr.File).To(HaveLen(2))
+		var combinedPCM []byte
+		for _, entry := range zr.File {
+			r, err := entry.Open()
+			Expect(err).NotTo(HaveOccurred())
+			data, err := io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Close()).To(Succeed())
+			if format != "flac" {
+				Expect(original).To(HaveKey(entry.Name))
+				expected, actual := sha256.Sum256(original[entry.Name]), sha256.Sum256(data)
+				Expect(actual).To(Equal(expected))
+				fmt.Fprintf(GinkgoWriter, "SHA256 original %s %x = downloaded %x\n", entry.Name, expected, actual)
+			} else {
+				Expect(entry.Name).To(HaveSuffix(".flac"))
+				Expect(string(data)).To(HavePrefix("fLaC"))
+				output := filepath.Join(dir, filepath.Base(entry.Name))
+				Expect(os.WriteFile(output, data, 0600)).To(Succeed())
+				tags, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json", output).Output()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.ToLower(string(tags))).NotTo(ContainSubstring("cuesheet"))
+				pcm, err := exec.Command("ffmpeg", "-v", "error", "-i", output, "-f", fmt.Sprintf("s%dle", bits), "-").Output()
+				Expect(err).NotTo(HaveOccurred())
+				combinedPCM = append(combinedPCM, pcm...)
+			}
+		}
+		if format == "flac" {
+			// #nosec G204 -- The filename and PCM format come from this synthetic test table.
+			pcm, err := exec.Command("ffmpeg", "-v", "error", "-i", filepath.Join(dir, base+".ape"), "-f", fmt.Sprintf("s%dle", bits), "-").Output()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sha256.Sum256(combinedPCM)).To(Equal(sha256.Sum256(pcm)))
+			fmt.Fprintf(GinkgoWriter, "SHA256 %d-bit decoded original PCM %x = concatenated FLAC PCM %x; no CUE files or CUESHEET tags\n", bits, sha256.Sum256(pcm), sha256.Sum256(combinedPCM))
+		}
+	}, Entry("16-bit raw album", 16, "album", "raw", ".cue"), Entry("24-bit default album", 24, "album", "", ".cue"),
+		Entry("16-bit raw track with .ape.cue", 16, "track1", "raw", ".ape.cue"), Entry("24-bit raw track", 24, "track1", "raw", ".cue"),
+		Entry("16-bit FLAC album", 16, "album", "flac", ".cue"), Entry("24-bit FLAC album", 24, "album", "flac", ".cue"))
 
 	It("downloads a converted APE CUE track with a FLAC filename and content type", func() {
 		DeferCleanup(configtest.SetupConfig())

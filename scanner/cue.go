@@ -77,19 +77,7 @@ func (p *phaseFolders) cueSources(entry *folderEntry) map[string]cueSource {
 }
 
 func cueSourceName(name string, files map[string]fs.DirEntry) (string, error) {
-	if _, ok := files[name]; ok {
-		return name, nil
-	}
-	var matched string
-	for candidate := range files {
-		if strings.EqualFold(candidate, name) {
-			if matched != "" {
-				return "", fmt.Errorf("CUE FILE %q matches multiple audio files ignoring case", name)
-			}
-			matched = candidate
-		}
-	}
-	return matched, nil
+	return cue.ResolveSourceName(name, files)
 }
 
 func (p *phaseFolders) cueWarning(name string, err error) {

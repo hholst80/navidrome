@@ -4,11 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/navidrome/navidrome/conf"
@@ -107,6 +109,10 @@ var _ = Describe("CUE archive downloads", func() {
 				original, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.ape")
 				Expect(err).NotTo(HaveOccurred())
 				Expect(os.WriteFile(source, original, 0600)).To(Succeed())
+				sheet, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.cue")
+				Expect(err).NotTo(HaveOccurred())
+				sheet = []byte(strings.ReplaceAll(string(sheet), "stereo-16.ape", "album.ape"))
+				Expect(os.WriteFile(filepath.Join(dir, "album.cue"), sheet, 0600)).To(Succeed())
 				channels = 2
 			} else {
 				output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
@@ -136,7 +142,20 @@ var _ = Describe("CUE archive downloads", func() {
 			zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 			Expect(err).NotTo(HaveOccurred())
 			if format == "raw" || format == "" {
-				Expect(zr.File).To(HaveLen(1))
+				if sourceFormat == "ape" {
+					Expect(zr.File).To(HaveLen(2))
+					Expect(zr.File[1].Name).To(Equal("Album_Name/album.cue"))
+					r, err := zr.File[1].Open()
+					Expect(err).NotTo(HaveOccurred())
+					sheet, err := io.ReadAll(r)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(r.Close()).To(Succeed())
+					originalSheet, err := os.ReadFile(filepath.Join(dir, "album.cue"))
+					Expect(err).NotTo(HaveOccurred())
+					Expect(sha256.Sum256(sheet)).To(Equal(sha256.Sum256(originalSheet)))
+				} else {
+					Expect(zr.File).To(HaveLen(1))
+				}
 				r, err := zr.File[0].Open()
 				Expect(err).NotTo(HaveOccurred())
 				data, err := io.ReadAll(r)

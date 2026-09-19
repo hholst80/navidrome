@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata/cue"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server/subsonic/responses"
 	"github.com/navidrome/navidrome/utils/req"
@@ -176,6 +177,16 @@ func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
 }
 
 func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
+	sidecar, err := cue.OriginalSidecar(mf.AbsolutePath())
+	if err != nil {
+		return err
+	}
+	if sidecar != "" {
+		name := strings.TrimSuffix(filepath.Base(mf.Path), filepath.Ext(mf.Path)) + ".zip"
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		w.Header().Set("Content-Type", "application/zip")
+		return handleArchiveErr(w, core.ZipOriginalCUE(r.Context(), mf, sidecar, w))
+	}
 	f, err := os.Open(mf.AbsolutePath())
 	if err != nil {
 		return err
