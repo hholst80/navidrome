@@ -1228,6 +1228,66 @@ var _ = Describe("ArtistRepository", func() {
 			repo = NewArtistRepository(ctx, GetDBXBuilder()).(*artistRepository)
 		})
 
+		It("counts physical sources once across CUE tracks, roles and subroles in each library", func() {
+			artist := model.Artist{ID: "size-artist", Name: "Size Artist"}
+			Expect(repo.Put(&artist)).To(Succeed())
+			DeferCleanup(func() { Expect(repo.delete(squirrel.Eq{"id": artist.ID})).To(Succeed()) })
+			for _, libraryID := range []int{901, 902} {
+				_, err := repo.executeSQL(squirrel.Insert("library").SetMap(map[string]any{
+					"id": libraryID, "name": fmt.Sprintf("Size %d", libraryID), "path": fmt.Sprintf("/size/%d", libraryID),
+				}))
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					_, err := repo.executeSQL(squirrel.Delete("library").Where(squirrel.Eq{"id": libraryID}))
+					Expect(err).ToNot(HaveOccurred())
+				})
+				_, err = repo.executeSQL(squirrel.Insert("library_artist").SetMap(map[string]any{
+					"artist_id": artist.ID, "library_id": libraryID, "stats": `{"total":{"a":99,"m":99,"s":99999}}`,
+				}))
+				Expect(err).ToNot(HaveOccurred())
+				// Two virtual tracks share an image; an ordinary file has the same byte size.
+				// The fourth file has only a composer credit, so maincredit must exclude it.
+				for n, path := range []string{"image.ape", "image.ape", "song.flac", "composition.flac"} {
+					id := fmt.Sprintf("size-%d-%d", libraryID, n)
+					cueTrack := 0
+					if n < 2 {
+						cueTrack = n + 1
+					}
+					_, err := repo.executeSQL(squirrel.Insert("media_file").SetMap(map[string]any{
+						"id": id, "library_id": libraryID, "album_id": fmt.Sprintf("size-album-%d", n/2),
+						"path": path, "size": 100, "cue_track": cueTrack,
+					}))
+					Expect(err).ToNot(HaveOccurred())
+					roles := [][2]string{{"artist", ""}, {"albumartist", ""}, {"performer", "guitar"}, {"performer", "piano"}}
+					if n == 3 {
+						roles = [][2]string{{"composer", ""}}
+					}
+					for _, role := range roles {
+						_, err := repo.executeSQL(squirrel.Insert("media_file_artists").SetMap(map[string]any{
+							"media_file_id": id, "artist_id": artist.ID, "role": role[0], "sub_role": role[1],
+						}))
+						Expect(err).ToNot(HaveOccurred())
+					}
+				}
+			}
+
+			_, err := repo.RefreshStats(true)
+			Expect(err).ToNot(HaveOccurred())
+			for _, libraryID := range []int{901, 902} {
+				var statsJSON []string
+				Expect(repo.queryAllSlice(squirrel.Select("json(stats)").From("library_artist").
+					Where(squirrel.Eq{"artist_id": artist.ID, "library_id": libraryID}), &statsJSON)).To(Succeed())
+				Expect(statsJSON).To(HaveLen(1))
+				var stats map[string]map[string]int64
+				Expect(json.Unmarshal([]byte(statsJSON[0]), &stats)).To(Succeed())
+				Expect(stats["total"]).To(Equal(map[string]int64{"a": 2, "m": 4, "s": 300}))
+				for _, role := range []string{"artist", "albumartist", "performer", "maincredit"} {
+					Expect(stats[role]).To(Equal(map[string]int64{"a": 2, "m": 3, "s": 200}), role)
+				}
+				Expect(stats["composer"]).To(Equal(map[string]int64{"a": 1, "m": 1, "s": 100}))
+			}
+		})
+
 		It("marks artists missing when the empty-stats cleanup drops their last library_artist row", func() {
 			// A library_artist row with stats '{}' (no content) gets deleted by the cleanup,
 			// which would orphan this non-missing artist.
