@@ -53,3 +53,25 @@ func TestOriginalCUERejectsUnsafeArchivePaths(t *testing.T) {
 		})
 	}
 }
+
+func TestOriginalCUEHonorsAncestorIgnoreFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "Album"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		".ndignore":           "Album/image.cue\n",
+		"Album/image.ape":     "source",
+		"Album/image.cue":     "FILE \"image.ape\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n",
+		"Album/image.ape.cue": "FILE \"image.ape\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sheet, err := OriginalCUESidecar(context.Background(), &model.MediaFile{LibraryPath: root, Path: "Album/image.ape"})
+	if err != nil || sheet == nil || sheet.Name != "image.ape.cue" {
+		t.Fatalf("ignored preferred sheet should not be selected: %+v, %v", sheet, err)
+	}
+}

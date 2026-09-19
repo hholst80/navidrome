@@ -15,7 +15,6 @@ import (
 	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
-	"github.com/navidrome/navidrome/model/metadata/cue"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server/subsonic/responses"
 	"github.com/navidrome/navidrome/utils/req"
@@ -177,7 +176,7 @@ func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
 }
 
 func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
-	sidecar, err := cue.OriginalSidecar(mf.AbsolutePath(), conf.Server.Scanner.FollowSymlinks, model.IsAudioFile)
+	sidecar, err := core.OriginalCUESidecar(r.Context(), mf)
 	if err != nil {
 		return err
 	}

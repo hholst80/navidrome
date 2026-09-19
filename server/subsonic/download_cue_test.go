@@ -116,6 +116,12 @@ var _ = Describe("CUE original downloads", func() {
 		if cueSuffix == ".cue" {
 			Expect(os.WriteFile(filepath.Join(dir, base+".ape.cue"), original[base+".cue"], 0600)).To(Succeed())
 		}
+		if mode == "ignored" {
+			sheet := original[base+cueSuffix]
+			Expect(os.WriteFile(filepath.Join(dir, base+".cue"), sheet, 0600)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(dir, ".hidden.cue"), sheet, 0600)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(dir, ".ndignore"), []byte(base+".cue\n"), 0600)).To(Succeed())
+		}
 		conf.Server.Scanner.FollowSymlinks = true
 		sourcePath := filepath.Join(dir, base+".ape")
 		if mode == "case" {
@@ -193,7 +199,8 @@ var _ = Describe("CUE original downloads", func() {
 		Entry("16-bit FLAC album", 16, "album", "flac", ".cue", ""), Entry("24-bit FLAC album", 24, "album", "flac", ".cue", ""),
 		Entry("case mismatch original album", 16, "album", "raw", ".cue", "case"),
 		Entry("case mismatch original track", 24, "track1", "raw", ".cue", "case"),
-		Entry("symlinked sheet with unrelated broken link", 16, "album", "raw", ".cue", "symlink"))
+		Entry("symlinked sheet with unrelated broken link", 16, "album", "raw", ".cue", "symlink"),
+		Entry("ignored preferred and hidden sheets", 16, "album", "raw", ".ape.cue", "ignored"))
 
 	It("downloads a converted APE CUE track with a FLAC filename and content type", func() {
 		DeferCleanup(configtest.SetupConfig())

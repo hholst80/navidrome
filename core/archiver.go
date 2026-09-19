@@ -156,7 +156,7 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 				}
 				usedSources[source] = true
 				if mf.CueTrack > 0 {
-					sidecar, err = cue.OriginalSidecar(source, conf.Server.Scanner.FollowSymlinks, model.IsAudioFile)
+					sidecar, err = OriginalCUESidecar(ctx, &mf)
 					if err != nil {
 						_ = z.Close()
 						return err

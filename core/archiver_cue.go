@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/metadata/cue"
+	"github.com/navidrome/navidrome/utils/scanignore"
 )
 
 // ZipOriginalCUE packages the original image and external sheet without changing
@@ -73,4 +75,28 @@ func originalCUEArchiveNames(image, sidecar string, used map[string]bool) (strin
 	used[strings.ToLower(image)] = true
 	used[strings.ToLower(sidecar)] = true
 	return image, sidecar
+}
+
+// OriginalCUESidecar applies the same library-relative ignore patterns as scanning.
+func OriginalCUESidecar(ctx context.Context, mf *model.MediaFile) (*cue.Sidecar, error) {
+	source := mf.AbsolutePath()
+	root := mf.LibraryPath
+	if root == "" {
+		root = filepath.Dir(source)
+	}
+	relativeDir, err := filepath.Rel(root, filepath.Dir(source))
+	if err != nil {
+		return nil, err
+	}
+	relativeDir = filepath.ToSlash(relativeDir)
+	if relativeDir == ".." || strings.HasPrefix(relativeDir, "../") || path.IsAbs(relativeDir) {
+		return nil, fmt.Errorf("CUE source is outside its library")
+	}
+	checker := scanignore.New(os.DirFS(root))
+	if err := checker.PushAllParents(ctx, relativeDir); err != nil {
+		return nil, err
+	}
+	return cue.OriginalSidecar(source, conf.Server.Scanner.FollowSymlinks, model.IsAudioFile, func(name string) bool {
+		return checker.ShouldIgnore(ctx, path.Join(relativeDir, name))
+	})
 }

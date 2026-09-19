@@ -36,7 +36,7 @@ func TestOriginalSidecar(t *testing.T) {
 			for name, ref := range tc.files {
 				write(name, "FILE \""+ref+"\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n")
 			}
-			got, err := cue.OriginalSidecar(filepath.Join(dir, "album.ape"), false, model.IsAudioFile)
+			got, err := cue.OriginalSidecar(filepath.Join(dir, "album.ape"), false, model.IsAudioFile, nil)
 			name := ""
 			if got != nil {
 				name = got.Name
@@ -74,7 +74,7 @@ func TestOriginalSidecarSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, follow := range []bool{false, true} {
-		got, err := cue.OriginalSidecar(source, follow, model.IsAudioFile)
+		got, err := cue.OriginalSidecar(source, follow, model.IsAudioFile, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
