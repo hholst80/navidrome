@@ -4,11 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/navidrome/navidrome/conf"
@@ -36,6 +38,62 @@ func (cueArchiveTranscodingRepo) FindByFormat(format string) (*model.Transcoding
 }
 
 var _ = Describe("CUE archive downloads", func() {
+	DescribeTable("names APE CUE playlist and share entries after the streamed format", func(kind, format string) {
+		DeferCleanup(configtest.SetupConfig())
+		ctx := GinkgoT().Context()
+		conf.Server.CacheFolder = conf.NewDir(GinkgoT().TempDir())
+		conf.Server.TranscodingCacheSize = "10MB"
+		name, err := filepath.Abs("tests/fixtures/cue-ape/stereo-24.ape")
+		Expect(err).NotTo(HaveOccurred())
+		original, err := os.ReadFile(name)
+		Expect(err).NotTo(HaveOccurred())
+		tracks := model.MediaFiles{
+			{ID: "original", Path: name, Suffix: "ape", Artist: "Artist", Title: "Image"},
+			{ID: "first", Path: name, Suffix: "ape", Artist: "Artist", Title: "First", CueTrack: 1,
+				CueEndSample: 117760, SampleRate: 96000, Channels: 2, BitDepth: new(24), Duration: 92.0 / 75},
+			{ID: "second", Path: name, Suffix: "ape", Artist: "Artist", Title: "Second", CueTrack: 2,
+				CueStartSample: 117760, SampleRate: 96000, Channels: 2, BitDepth: new(24), Duration: 3 - 92.0/75},
+		}
+		ds := &mockDataStore{DataStore: &tests.MockDataStore{MockedTranscoding: cueArchiveTranscodingRepo{}}}
+		cache := stream.NewTranscodingCache()
+		Eventually(func() bool { return cache.Available(ctx) }, 10*time.Second).Should(BeTrue())
+		arch := core.NewArchiver(stream.NewMediaStreamer(ds, ffmpeg.New(), cache), ds, nil)
+		var out bytes.Buffer
+		if kind == "playlist" {
+			repo := &mockPlaylistRepository{}
+			repo.On("GetWithTracks", "list", true, false).Return(&model.Playlist{ID: "list", Name: "List",
+				Tracks: []model.PlaylistTrack{{MediaFile: tracks[0]}, {MediaFile: tracks[1]}, {MediaFile: tracks[2]}}}, nil)
+			ds.On("Playlist", mock.Anything).Return(repo)
+			Expect(arch.ZipPlaylist(ctx, "list", format, 0, &out)).To(Succeed())
+		} else {
+			Expect(arch.ZipShare(ctx, &model.Share{ID: "share", Downloadable: true, Format: format, Tracks: tracks}, &out)).To(Succeed())
+		}
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		entries := map[string][]byte{}
+		for _, entry := range zr.File {
+			r, err := entry.Open()
+			Expect(err).NotTo(HaveOccurred())
+			entries[entry.Name], err = io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Close()).To(Succeed())
+		}
+		Expect(entries["01 - Artist - Image.ape"]).To(Equal(original))
+		for _, filename := range []string{"02 - Artist - First.flac", "03 - Artist - Second.flac"} {
+			Expect(string(entries[filename])).To(HavePrefix("fLaC"))
+			if kind == "playlist" {
+				Expect(string(entries["List.m3u"])).To(ContainSubstring("\n" + filename + "\n"))
+			}
+		}
+		if kind == "playlist" {
+			Expect(entries).To(HaveLen(4))
+			Expect(string(entries["List.m3u"])).To(ContainSubstring("\n01 - Artist - Image.ape\n"))
+		} else {
+			Expect(entries).To(HaveLen(3))
+		}
+	}, Entry("raw playlist", "playlist", "raw"), Entry("default playlist", "playlist", ""),
+		Entry("raw public share", "share", "raw"), Entry("default public share", "share", ""))
+
 	DescribeTable("exports distinct audio segments with unique names",
 		func(format, sourceFormat string, multiDisc bool) {
 			DeferCleanup(configtest.SetupConfig())
@@ -46,9 +104,22 @@ var _ = Describe("CUE archive downloads", func() {
 			source := filepath.Join(dir, "album."+sourceFormat)
 			binary, err := exec.LookPath("ffmpeg")
 			Expect(err).NotTo(HaveOccurred())
-			output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
-				`aevalsrc=if(lt(t\,1)\,0.25\,-0.25):s=44100:d=2`, source).CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), string(output))
+			channels := 1
+			if sourceFormat == "ape" {
+				source = filepath.Join(dir, "album.APE")
+				original, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.ape")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(os.WriteFile(source, original, 0600)).To(Succeed())
+				sheet, err := os.ReadFile("tests/fixtures/cue-ape/stereo-16.cue")
+				Expect(err).NotTo(HaveOccurred())
+				sheet = []byte(strings.ReplaceAll(string(sheet), "stereo-16.ape", "album.ape"))
+				Expect(os.WriteFile(filepath.Join(dir, "album.cue"), sheet, 0600)).To(Succeed())
+				channels = 2
+			} else {
+				output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
+					`aevalsrc=if(lt(t\,1)\,0.25\,-0.25):s=44100:d=2`, source).CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(output))
+			}
 			tracks := model.MediaFiles{}
 			for i := range 2 {
 				disc := 1
@@ -58,7 +129,7 @@ var _ = Describe("CUE archive downloads", func() {
 				tracks = append(tracks, model.MediaFile{ID: fmt.Sprint(i), Path: source, Suffix: sourceFormat,
 					Album: "Album/Name", AlbumID: "album", Title: "Same/Title", DiscNumber: disc, TrackNumber: i + 1,
 					CueTrack: i + 1, CueStartSample: int64(i * 44100), CueEndSample: int64((i + 1) * 44100),
-					SampleRate: 44100, Channels: 1, Duration: 1})
+					SampleRate: 44100, Channels: channels, Duration: 1})
 			}
 			repo := &mockMediaFileRepository{}
 			repo.On("GetAll", mock.Anything).Return(tracks, nil)
@@ -72,7 +143,20 @@ var _ = Describe("CUE archive downloads", func() {
 			zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 			Expect(err).NotTo(HaveOccurred())
 			if format == "raw" || format == "" {
-				Expect(zr.File).To(HaveLen(1))
+				if sourceFormat == "ape" {
+					Expect(zr.File).To(HaveLen(2))
+					Expect(zr.File[1].Name).To(Equal("Album_Name/album.cue"))
+					r, err := zr.File[1].Open()
+					Expect(err).NotTo(HaveOccurred())
+					sheet, err := io.ReadAll(r)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(r.Close()).To(Succeed())
+					originalSheet, err := os.ReadFile(filepath.Join(dir, "album.cue"))
+					Expect(err).NotTo(HaveOccurred())
+					Expect(sha256.Sum256(sheet)).To(Equal(sha256.Sum256(originalSheet)))
+				} else {
+					Expect(zr.File).To(HaveLen(1))
+				}
 				r, err := zr.File[0].Open()
 				Expect(err).NotTo(HaveOccurred())
 				data, err := io.ReadAll(r)
@@ -85,6 +169,8 @@ var _ = Describe("CUE archive downloads", func() {
 				return
 			}
 			Expect(zr.File).To(HaveLen(2))
+			sourcePCM, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", source, "-f", "s16le", "-").Output()
+			Expect(err).NotTo(HaveOccurred())
 			ext := sourceFormat
 			if format != "" && format != "raw" {
 				ext = format
@@ -104,9 +190,8 @@ var _ = Describe("CUE archive downloads", func() {
 				Expect(os.WriteFile(file, data, 0o600)).To(Succeed())
 				pcm, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", file, "-f", "s16le", "-").Output()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(pcm).To(HaveLen(44100 * 2))
-				// The first second is positive DC, the second negative: verify content as well as length.
-				Expect(pcm[1] < 128).To(Equal(i == 0))
+				segmentSize := 44100 * channels * 2
+				Expect(pcm).To(Equal(sourcePCM[i*segmentSize : (i+1)*segmentSize]))
 			}
 		},
 		Entry("raw FLAC", "raw", "flac", false),
@@ -115,5 +200,8 @@ var _ = Describe("CUE archive downloads", func() {
 		Entry("converted WAV to FLAC", "flac", "wav", false),
 		Entry("converted FLAC", "flac", "flac", false),
 		Entry("multiple discs converted", "flac", "flac", true),
+		Entry("raw APE", "raw", "ape", false),
+		Entry("default APE", "", "ape", false),
+		Entry("APE converted to FLAC", "flac", "ape", false),
 	)
 })

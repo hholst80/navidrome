@@ -490,51 +490,41 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
 	}
 
 	// Template for the batch update with placeholder markers that we'll replace
-	// This now calculates per-library statistics and stores them in library_artist.stats
+	// Count tracks/albums independently of physical bytes: CUE tracks share a path,
+	// and an artist may have several roles or subroles on the same track.
 	batchUpdateStatsSQL := `
-    WITH artist_role_counters AS (
-        SELECT mfa.artist_id,
-               mf.library_id,
-               mfa.role,
-               count(DISTINCT mf.album_id) AS album_count,
-               count(DISTINCT mf.id) AS count,
-               sum(mf.size) AS size
+    WITH artist_tracks AS (
+        SELECT mfa.artist_id, mf.library_id, mfa.role, mf.id, mf.album_id, mf.path, mf.size
         FROM media_file_artists mfa
         JOIN media_file mf ON mfa.media_file_id = mf.id
-        WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
-        GROUP BY mfa.artist_id, mf.library_id, mfa.role
+        WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER)
     ),
-    artist_total_counters AS (
-        SELECT mfa.artist_id,
-               mf.library_id,
-               'total' AS role,
-               count(DISTINCT mf.album_id) AS album_count,
-               count(DISTINCT mf.id) AS count,
-               sum(mf.size) AS size
-        FROM media_file_artists mfa
-        JOIN media_file mf ON mfa.media_file_id = mf.id
-        WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
-        GROUP BY mfa.artist_id, mf.library_id
+    credited_tracks AS (
+        SELECT * FROM artist_tracks
+        UNION ALL
+        SELECT artist_id, library_id, 'total', id, album_id, path, size FROM artist_tracks
+        UNION ALL
+        SELECT artist_id, library_id, 'maincredit', id, album_id, path, size FROM artist_tracks
+        WHERE role IN ('albumartist', 'artist')
     ),
-    artist_participant_counter AS (
-        SELECT mfa.artist_id,
-               mf.library_id,
-               'maincredit' AS role,
-               count(DISTINCT mf.album_id) AS album_count,
-               count(DISTINCT mf.id) AS count,
-               sum(mf.size) AS size
-        FROM media_file_artists mfa
-        JOIN media_file mf ON mfa.media_file_id = mf.id
-        WHERE mfa.artist_id IN (ROLE_IDS_PLACEHOLDER) -- Will replace with actual placeholders
-        AND mfa.role IN ('albumartist', 'artist')
-        GROUP BY mfa.artist_id, mf.library_id
+    physical_sources AS (
+        SELECT artist_id, library_id, role, path, max(size) AS size
+        FROM credited_tracks
+        GROUP BY artist_id, library_id, role, path
+    ),
+    physical_sizes AS (
+        SELECT artist_id, library_id, role, sum(size) AS size
+        FROM physical_sources
+        GROUP BY artist_id, library_id, role
     ),
     combined_counters AS (
-        SELECT artist_id, library_id, role, album_count, count, size FROM artist_role_counters
-        UNION ALL
-        SELECT artist_id, library_id, role, album_count, count, size FROM artist_total_counters
-        UNION ALL
-        SELECT artist_id, library_id, role, album_count, count, size FROM artist_participant_counter
+        SELECT ct.artist_id, ct.library_id, ct.role,
+               count(DISTINCT ct.album_id) AS album_count,
+               count(DISTINCT ct.id) AS count,
+               ps.size
+        FROM credited_tracks ct
+        JOIN physical_sizes ps USING (artist_id, library_id, role)
+        GROUP BY ct.artist_id, ct.library_id, ct.role
     ),
     library_artist_counters AS (
         SELECT artist_id,
@@ -569,13 +559,12 @@ func (r *artistRepository) RefreshStats(allArtists bool) (int64, error) {
 		inClause := strings.Join(placeholders, ",")
 
 		// Replace the placeholder markers with actual SQL placeholders
-		batchSQL := strings.Replace(batchUpdateStatsSQL, "ROLE_IDS_PLACEHOLDER", inClause, 4)
+		batchSQL := strings.Replace(batchUpdateStatsSQL, "ROLE_IDS_PLACEHOLDER", inClause, 2)
 
-		// Create a single parameter array with all IDs (repeated 4 times for each IN clause)
-		// We need to repeat each ID 4 times (once for each IN clause)
-		args := make([]any, 4*len(artistIDBatch))
+		// Repeat the IDs for the source selection and the final update.
+		args := make([]any, 2*len(artistIDBatch))
 		for idx, id := range artistIDBatch {
-			for i := range 4 {
+			for i := range 2 {
 				startIdx := i * len(artistIDBatch)
 				args[startIdx+idx] = id
 			}

@@ -33,3 +33,19 @@ func TestCUECacheMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestCUECacheSegments(t *testing.T) {
+	mf := model.MediaFile{ID: "ape-track", Suffix: "ape", CueTrack: 1, CueEndSample: 44100}
+	key := (&streamJob{mf: &mf, format: "flac"}).Key()
+	for _, change := range []func(*model.MediaFile){
+		func(m *model.MediaFile) { m.CueTrack++ },
+		func(m *model.MediaFile) { m.CueStartSample++ },
+		func(m *model.MediaFile) { m.CueEndSample++ },
+	} {
+		changed := mf
+		change(&changed)
+		assert.NotEqual(t, key, (&streamJob{mf: &changed, format: "flac"}).Key())
+	}
+	assert.NotEqual(t, key, (&streamJob{mf: &mf, format: "flac", offset: 1}).Key())
+	assert.NotEqual(t, key, (&streamJob{mf: &mf, format: "wav"}).Key())
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/conf/configtest"
@@ -52,6 +53,58 @@ var _ = Describe("Decider", func() {
 	})
 
 	Describe("MakeDecision", func() {
+		DescribeTable("negotiates APE CUE tracks without advertising APE direct play",
+			func(cueTrack int, target string, direct, transcode bool) {
+				mf := withProbe(&model.MediaFile{ID: "ape", Suffix: "ape", Codec: "APE", CueTrack: cueTrack,
+					SampleRate: 96000, Channels: 2, BitDepth: new(24), BitRate: 1000, UpdatedAt: time.Now()})
+				ci := &ClientInfo{DirectPlayProfiles: []DirectPlayProfile{{Containers: []string{"ape"}}}}
+				if target != "" {
+					ci.TranscodingProfiles = []Profile{{Container: target, AudioCodec: target}}
+				}
+				decision, err := svc.MakeDecision(ctx, mf, ci, TranscodeOptions{})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.SourceStream.Container).To(Equal("ape"))
+				Expect(decision.CanDirectPlay).To(Equal(direct))
+				Expect(decision.CanTranscode).To(Equal(transcode))
+				if transcode {
+					Expect(decision.TargetFormat).To(Equal(target))
+					Expect(decision.TranscodeStream.Container).To(Equal(target))
+					Expect(decision.TranscodeReasons).To(ContainElement("APE CUE tracks require transcoding"))
+					token, err := svc.CreateTranscodeParams(decision)
+					Expect(err).NotTo(HaveOccurred())
+					req, err := svc.ResolveRequestFromToken(ctx, token, mf, 1)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(req.Format).To(Equal(target))
+					Expect(req.Offset).To(Equal(1))
+					if target == "flac" {
+						Expect(req.SampleRate).To(Equal(96000))
+						Expect(req.BitDepth).To(Equal(24))
+						Expect(req.Channels).To(Equal(2))
+					}
+				} else if !direct {
+					Expect(decision.ErrorReason).To(Equal("no compatible playback profile found"))
+				}
+			},
+			Entry("lossless FLAC", 1, "flac", false, true),
+			Entry("client requests MP3", 1, "mp3", false, true),
+			Entry("APE-only client", 1, "", false, false),
+			Entry("APE is not an output encoder", 1, "ape", false, false),
+			Entry("ordinary APE still plays directly", 0, "flac", true, false),
+		)
+
+		It("resolves unconstrained legacy APE CUE playback to lossless FLAC", func() {
+			mf := &model.MediaFile{ID: "ape", Suffix: "ape", CueTrack: 1,
+				SampleRate: 96000, Channels: 2, BitDepth: new(24), BitRate: 1000}
+			req := svc.ResolveRequest(ctx, mf, "", 0, 1)
+			Expect(req.Format).To(Equal("flac"))
+			Expect(req.SampleRate).To(Equal(96000))
+			Expect(req.BitDepth).To(Equal(24))
+			Expect(req.Channels).To(Equal(2))
+			Expect(req.Offset).To(Equal(1))
+			Expect(svc.ResolveRequest(ctx, mf, "raw", 0, 0).Format).To(Equal("raw"))
+			Expect(svc.ResolveRequest(ctx, mf, "mp3", 128, 0).Format).To(Equal("mp3"))
+		})
+
 		Context("Direct Play", func() {
 			It("allows direct play when profile matches", func() {
 				mf := withProbe(&model.MediaFile{ID: "1", Suffix: "mp3", Codec: "MP3", BitRate: 320, Channels: 2, SampleRate: 44100})

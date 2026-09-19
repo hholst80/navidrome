@@ -1,7 +1,8 @@
-package scanner
+package scanignore
 
 import (
 	"context"
+	"testing"
 	"testing/fstest"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -311,3 +312,5 @@ var _ = Describe("IgnoreChecker", func() {
 		})
 	})
 })
+
+func TestIgnoreChecker(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Ignore Checker Suite") }

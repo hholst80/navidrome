@@ -176,6 +176,16 @@ func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
 }
 
 func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
+	sidecar, err := core.OriginalCUESidecar(r.Context(), mf)
+	if err != nil {
+		return err
+	}
+	if sidecar != nil {
+		name := strings.TrimSuffix(filepath.Base(mf.Path), filepath.Ext(mf.Path)) + ".zip"
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		w.Header().Set("Content-Type", "application/zip")
+		return handleArchiveErr(w, core.ZipOriginalCUE(r.Context(), mf, sidecar, w))
+	}
 	f, err := os.Open(mf.AbsolutePath())
 	if err != nil {
 		return err

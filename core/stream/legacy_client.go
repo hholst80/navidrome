@@ -27,6 +27,10 @@ func buildLegacyClientInfo(mf *model.MediaFile, reqFormat string, reqBitRate int
 		// client sent no format/bitrate params (issue #5583, legacy /stream path).
 		targetFormat = conf.Server.DefaultDownsamplingFormat
 	}
+	if targetFormat == "" && mf.CueTrack > 0 && strings.EqualFold(mf.Suffix, "ape") {
+		// Unconstrained legacy playback means original quality, served as FLAC.
+		targetFormat = OutputFormat(mf, "raw")
+	}
 
 	if targetFormat != "" {
 		// Add a direct play profile for the source format when no explicit

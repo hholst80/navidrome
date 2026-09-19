@@ -64,8 +64,12 @@ func (s *deciderService) MakeDecision(ctx context.Context, mf *model.MediaFile, 
 		"codec", src.Codec, "bitrate", src.Bitrate, "channels", src.Channels,
 		"sampleRate", src.SampleRate, "lossless", src.IsLossless, "client", clientInfo.Name)
 
-	// Check global bitrate constraint first.
-	if clientInfo.MaxAudioBitrate > 0 && src.Bitrate > clientInfo.MaxAudioBitrate {
+	// Determine whether the source is eligible for direct play.
+	if mf.CueTrack > 0 && strings.EqualFold(mf.Suffix, "ape") {
+		// An APE image cannot be served as an individual APE track. Keep
+		// SourceStream truthful and negotiate an encodable client format.
+		decision.TranscodeReasons = append(decision.TranscodeReasons, "APE CUE tracks require transcoding")
+	} else if clientInfo.MaxAudioBitrate > 0 && src.Bitrate > clientInfo.MaxAudioBitrate {
 		log.Trace(ctx, "Global bitrate constraint exceeded, skipping direct play",
 			"sourceBitrate", src.Bitrate, "maxAudioBitrate", clientInfo.MaxAudioBitrate)
 		decision.TranscodeReasons = append(decision.TranscodeReasons, "audio bitrate not supported")

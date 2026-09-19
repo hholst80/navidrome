@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata/cue"
 	"github.com/navidrome/navidrome/persistence"
 	"github.com/navidrome/navidrome/utils/slice"
 	"github.com/navidrome/navidrome/utils/str"
@@ -147,16 +148,35 @@ func (a *archiver) zipAlbums(ctx context.Context, id string, format string, bitr
 		log.Debug(ctx, "Zipping album", "name", album[0].Album, "artist", album[0].AlbumArtist,
 			"format", format, "bitrate", bitrate, "isMultiDisc", isMultiDisc, "numTracks", len(album))
 		for _, mf := range album {
+			var sidecar *cue.Sidecar
 			if format == "raw" || format == "" {
 				source := mf.AbsolutePath()
 				if usedSources[source] {
 					continue
 				}
 				usedSources[source] = true
+				if mf.CueTrack > 0 {
+					sidecar, err = OriginalCUESidecar(ctx, &mf)
+					if err != nil {
+						_ = z.Close()
+						return err
+					}
+				}
 				// Original format copies the source image once, without splitting.
 				mf.CueTrack = 0
 			}
-			file := uniqueArchiveName(a.albumFilename(mf, format, isMultiDisc), usedNames)
+			file := a.albumFilename(mf, format, isMultiDisc)
+			if sidecar != nil {
+				imageName, cueName := originalCUEArchiveNames(filepath.Join(filepath.Dir(file), sidecar.SourceName), sidecar.Name, usedNames)
+				for _, entry := range []struct{ source, name string }{{filepath.Base(mf.AbsolutePath()), imageName}, {sidecar.Name, cueName}} {
+					if err := addOriginalCUEFile(z, filepath.Dir(mf.AbsolutePath()), entry.source, entry.name); err != nil {
+						_ = z.Close()
+						return err
+					}
+				}
+				continue
+			}
+			file = uniqueArchiveName(file, usedNames)
 			if addErr := a.addFileToZip(ctx, z, mf, format, bitrate, file); addErr != nil {
 				// Return failures instead of silently delivering an incomplete album.
 				_ = z.Close()
@@ -274,10 +294,7 @@ func (a *archiver) zipMediaFiles(ctx context.Context, id, name string, format st
 }
 
 func (a *archiver) playlistFilename(mf model.MediaFile, format string, idx int) string {
-	ext := mf.Suffix
-	if format != "" && format != "raw" {
-		ext = format
-	}
+	ext := stream.OutputFormat(&mf, format)
 	return fmt.Sprintf("%02d - %s - %s.%s", idx+1, str.SanitizeFilename(mf.Artist), str.SanitizeFilename(mf.Title), ext)
 }
 

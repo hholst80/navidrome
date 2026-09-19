@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils"
+	"github.com/navidrome/navidrome/utils/scanignore"
 )
 
 // walkDirTree recursively walks the directory tree starting from the given targetFolders.
@@ -324,5 +325,5 @@ func isDirIgnored(name string) bool {
 // references, and anything like "..foo" or "...Album" is a regular name (album
 // folders sometimes start with ellipses), so all of these return false.
 func isDotEntry(name string) bool {
-	return name != "." && strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "..")
+	return scanignore.IsDotEntry(name)
 }

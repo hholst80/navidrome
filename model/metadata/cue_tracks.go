@@ -15,8 +15,8 @@ import (
 // CUETracks expands a single lossless album image. The source path remains real;
 // CueTrack distinguishes the virtual tracks in persistence. No audio is modified.
 func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (model.MediaFiles, error) {
-	if md.Suffix() != "flac" && md.Suffix() != "wav" {
-		return nil, fmt.Errorf("CUE source must be FLAC or WAV")
+	if md.Suffix() != "flac" && md.Suffix() != "wav" && md.Suffix() != "ape" {
+		return nil, fmt.Errorf("CUE source must be FLAC, WAV or APE")
 	}
 	if len(sheet.File) != 1 || len(sheet.File[0].Tracks) == 0 {
 		return nil, fmt.Errorf("CUE must describe one audio file with tracks")
