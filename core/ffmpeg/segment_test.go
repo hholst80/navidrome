@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -38,6 +39,66 @@ var _ = Describe("CUE WAV extraction", func() {
 		_, err = segmentArgs(opts)
 		Expect(err).To(MatchError("custom transcoding commands are unsupported for CUE tracks"))
 	})
+})
+
+var _ = Describe("CUE coarse seeking", func() {
+	It("seeks before the input and trims relative integer samples", func() {
+		const rate = 44100
+		start := int64(44998 * (rate / 75))
+		end := int64(44999 * (rate / 75))
+		args, err := segmentArgs(TranscodeOptions{
+			FilePath: "album.wav", Format: "wav", Command: defaultCommands["wav"],
+			BitDepth: 16, SampleRate: rate, Channels: 2,
+			Segment: &AudioSegment{StartSample: start, EndSample: end, SourceRate: rate},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		seek := slices.Index(args, "-ss")
+		input := slices.Index(args, "-i")
+		filter := slices.Index(args, "-af")
+		Expect(seek).To(BeNumerically(">=", 0))
+		Expect(seek).To(BeNumerically("<", input))
+		Expect(args[seek+1]).To(Equal("597"))
+		Expect(args[filter+1]).To(Equal("atrim=start_sample=131124:end_sample=131712,asetpts=PTS-STARTPTS"))
+	})
+
+	DescribeTable("preserves late source samples after a coarse seek", func(sourceFormat, outputFormat string) {
+		binary, err := ffmpegCmd()
+		Expect(err).NotTo(HaveOccurred())
+		const rate = 48000
+		ctx := GinkgoT().Context()
+		dir := GinkgoT().TempDir()
+		source := filepath.Join(dir, "source."+sourceFormat)
+		codec := "flac"
+		if sourceFormat == "wav" {
+			codec = "pcm_s24le"
+		}
+		output, err := exec.CommandContext(ctx, binary, "-v", "error", "-f", "lavfi", "-i",
+			fmt.Sprintf("aevalsrc=0.3*sin(2*PI*997*t)|0.2*sin(2*PI*1231*t):s=%d:d=12", rate),
+			"-c:a", codec, source).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		decode := func(name string) []byte {
+			pcm, err := exec.CommandContext(ctx, binary, "-v", "error", "-i", name,
+				"-f", "s24le", "-c:a", "pcm_s24le", "-").Output()
+			Expect(err).NotTo(HaveOccurred())
+			return pcm
+		}
+		original := decode(source)
+		start := int64(10*rate + 17*(rate/75))
+		end := start + rate/2 + 11*(rate/75)
+		stream, err := New().Transcode(ctx, TranscodeOptions{
+			FilePath: source, Format: outputFormat, Command: defaultCommands[outputFormat],
+			BitDepth: 24, SampleRate: rate, Channels: 2,
+			Segment: &AudioSegment{StartSample: start, EndSample: end, SourceRate: rate},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		data, err := io.ReadAll(stream)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stream.Close()).To(Succeed())
+		name := filepath.Join(dir, "track."+outputFormat)
+		Expect(os.WriteFile(name, data, 0600)).To(Succeed())
+		frameSize := 2 * 3
+		Expect(decode(name)).To(Equal(original[int(start)*frameSize : int(end)*frameSize]))
+	}, Entry("WAV to WAV", "wav", "wav"), Entry("FLAC to FLAC", "flac", "flac"))
 })
 
 var _ = Describe("APE CUE sample preservation", func() {

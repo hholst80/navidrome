@@ -21,6 +21,8 @@ type AudioSegment struct {
 	Tags        map[string]string
 }
 
+const cueSeekPrerollSeconds int64 = 2
+
 // transcodeSegment uses the same codec and constraint builder as ordinary
 // streams, but trims decoded samples before resampling/encoding. A seekable
 // temporary output lets ffmpeg finalize FLAC/WAV headers (including the exact
@@ -84,11 +86,19 @@ func segmentArgs(opts TranscodeOptions) ([]string, error) {
 	if _, ok := formatOutputMap[opts.Format]; !ok {
 		return nil, fmt.Errorf("unsupported CUE output format: %s", opts.Format)
 	}
-	opts.Offset = 0 // Seeking is relative to the track, not the album image.
+	seekSeconds := start/int64(seg.SourceRate) - cueSeekPrerollSeconds
+	if seekSeconds < 0 {
+		seekSeconds = 0
+	}
+	seekSamples := seekSeconds * int64(seg.SourceRate)
+	opts.Offset = 0 // The client offset is already included in start.
 	args := buildDynamicArgs(opts)
-	filter := "atrim=start_sample=" + strconv.FormatInt(start, 10)
+	if seekSeconds > 0 {
+		args = slices.Insert(args, 1, "-ss", strconv.FormatInt(seekSeconds, 10))
+	}
+	filter := "atrim=start_sample=" + strconv.FormatInt(start-seekSamples, 10)
 	if seg.EndSample > 0 {
-		filter += ":end_sample=" + strconv.FormatInt(seg.EndSample, 10)
+		filter += ":end_sample=" + strconv.FormatInt(seg.EndSample-seekSamples, 10)
 	}
 	args = injectBeforeOutput(args, "-af", filter+",asetpts=PTS-STARTPTS")
 	if opts.Format == "wav" {
