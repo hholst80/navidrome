@@ -3,6 +3,7 @@ package subsonic
 import (
 	"context"
 	"encoding/json"
+	"mime"
 	"net/http/httptest"
 	"time"
 
@@ -208,6 +209,16 @@ var _ = Describe("helpers", func() {
 	)
 
 	Describe("childFromMediaFile", func() {
+		It("reports WAV playback for FLAC and APE CUE sources", func() {
+			for _, suffix := range []string{"flac", "ape"} {
+				mf := model.MediaFile{ID: "cue", CueTrack: 1, Suffix: suffix}
+				child := childFromMediaFile(context.Background(), mf)
+				Expect(child.Suffix).To(Equal(suffix))
+				Expect(child.TranscodedSuffix).To(Equal("wav"))
+				Expect(child.TranscodedContentType).To(Equal(mime.TypeByExtension(".wav")))
+			}
+		})
+
 		var mf model.MediaFile
 		var ctx context.Context
 

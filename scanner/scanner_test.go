@@ -116,8 +116,8 @@ var _ = Describe("Scanner", Ordered, func() {
 	It("refreshes sidecar CUE tracks when a sheet is edited, shortened, and removed", func() {
 		conf.Server.Scanner.CUESheetSupport = true
 		album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album", "samplerate": 44100, "duration": 120})
-		fs := createFS(fstest.MapFS{"one/album.flac": album()})
-		sheet := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n"
+		fs := createCUEFS(fstest.MapFS{"one/album.wav": album()})
+		sheet := "FILE \"album.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n"
 		update := func(text string, minute int) {
 			when := time.Now().Add(time.Duration(minute) * time.Minute)
 			fs.Add("one/album.cue", &fstest.MapFile{Data: []byte(text), ModTime: when}, when)
@@ -142,7 +142,7 @@ var _ = Describe("Scanner", Ordered, func() {
 		update(sheet, 3)
 		Expect(runScanner(ctx, false)).To(Succeed())
 		Expect(active()).To(HaveLen(1))
-		Expect(active()[0].CueEndSample).To(BeZero())
+		Expect(active()[0].CueEndSample).To(Equal(int64(120 * 44100)))
 		fs.Remove("one/album.cue", time.Now().Add(4*time.Minute))
 		Expect(runScanner(ctx, false)).To(Succeed())
 		restored := active()
@@ -150,10 +150,25 @@ var _ = Describe("Scanner", Ordered, func() {
 		Expect(restored[0].CueTrack).To(BeZero())
 	})
 
+	DescribeTable("keeps unsupported CUE sources as ordinary files", func(name string, encoding int) {
+		conf.Server.Scanner.CUESheetSupport = true
+		album := template(_t{"samplerate": 44100, "duration": 120, "wav_format": encoding})
+		createCUEFS(fstest.MapFS{
+			"one/" + name:   album(),
+			"one/album.cue": &fstest.MapFile{Data: []byte("FILE \"" + name + "\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n")},
+		})
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(1))
+		Expect(tracks[0].CueTrack).To(BeZero())
+	}, Entry("MP3", "album.mp3", 1),
+		Entry("compressed WAV", "album.wav", 2), Entry("floating-point WAV", "album.wav", 3))
+
 	Context("CUE support setting changes", func() {
 		BeforeEach(func() {
 			album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album",
-				"samplerate": 44100, "duration": 120, "cuesheet": `FILE "album.flac" WAVE
+				"samplerate": 44100, "duration": 120, "cuesheet": `FILE "album.wav" WAVE
   TRACK 01 AUDIO
     TITLE "First"
     INDEX 01 00:00:00
@@ -161,9 +176,9 @@ var _ = Describe("Scanner", Ordered, func() {
     TITLE "Second"
     INDEX 01 01:00:00
 `})
-			createFS(fstest.MapFS{
-				"one/album.flac": album(),
-				"two/album.flac": album(_t{"album": "Other Cue Album"}),
+			createCUEFS(fstest.MapFS{
+				"one/album.wav": album(),
+				"two/album.wav": album(_t{"album": "Other Cue Album"}),
 			})
 			Expect(runScanner(ctx, false)).To(Succeed())
 		})
@@ -189,6 +204,17 @@ var _ = Describe("Scanner", Ordered, func() {
 			for _, track := range activeTracks() {
 				Expect(track.CueTrack).To(BeZero())
 			}
+		})
+
+		It("refreshes unchanged files after upgrading the CUE source policy", func() {
+			conf.Server.Scanner.CUESheetSupport = true
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Put(consts.ScannerCUESourceVersionKey, "old-flac-wav")).To(Succeed())
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUESourceVersionKey)).To(Equal(consts.ScannerCUESourceVersion))
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("quick"))
 		})
 
 		It("retries a CUE refresh after a failed scan", func() {

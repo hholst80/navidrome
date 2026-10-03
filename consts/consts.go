@@ -22,6 +22,8 @@ const (
 	LastScanStartTimeKey          = "LastScanStartTime"
 	ScannerCUESheetSupportKey     = "ScannerCUESheetSupport"
 	ScannerCUERefreshPendingKey   = "ScannerCUERefreshPending"
+	ScannerCUESourceVersionKey    = "ScannerCUESourceVersion"
+	ScannerCUESourceVersion       = "lossless-to-wav-v1"
 	LastDBAnalyzeAtKey            = "LastDBAnalyzeAt"
 	LastDBAnalyzeAttemptAtKey     = "LastDBAnalyzeAttemptAt"
 	DBAnalyzePendingKey           = "DBAnalyzePending"

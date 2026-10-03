@@ -149,7 +149,7 @@ func (api *Router) Download(w http.ResponseWriter, r *http.Request) (*responses.
 	}
 }
 
-// Archive generation is staged, so failures can still produce a normal API error.
+// Only failures before any ZIP bytes are sent can produce a normal API error.
 func handleArchiveErr(w http.ResponseWriter, err error) error {
 	if errors.Is(err, core.ErrArchiveDelivery) {
 		panic(http.ErrAbortHandler)

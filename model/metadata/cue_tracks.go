@@ -12,11 +12,11 @@ import (
 	"github.com/navidrome/navidrome/model/metadata/cue"
 )
 
-// CUETracks expands a single lossless album image. The source path remains real;
+// CUETracks expands a lossless WAV, FLAC or APE album image. The source path remains real;
 // CueTrack distinguishes the virtual tracks in persistence. No audio is modified.
-func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (model.MediaFiles, error) {
-	if md.Suffix() != "flac" && md.Suffix() != "wav" {
-		return nil, fmt.Errorf("CUE source must be FLAC or WAV")
+func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string, totalSamples int64) (model.MediaFiles, error) {
+	if md.Suffix() != "wav" && md.Suffix() != "flac" && md.Suffix() != "ape" {
+		return nil, fmt.Errorf("CUE source must be PCM WAV, FLAC or APE")
 	}
 	if len(sheet.File) != 1 || len(sheet.File[0].Tracks) == 0 {
 		return nil, fmt.Errorf("CUE must describe one audio file with tracks")
@@ -26,7 +26,7 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (m
 		return nil, fmt.Errorf("CUE FILE must name the audio file in the same directory")
 	}
 	rate := md.audioProps.SampleRate
-	if rate <= 0 || rate%75 != 0 {
+	if rate <= 0 || rate%75 != 0 || totalSamples < 0 {
 		return nil, fmt.Errorf("CUE sample rate must be a positive multiple of 75")
 	}
 	starts := make([]int64, len(file.Tracks))
@@ -40,7 +40,8 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (m
 				continue
 			}
 			// Compare before multiplying to prevent overflow from hostile timestamps.
-			if float64(index.Frame)/75 >= md.audioProps.Duration.Seconds() {
+			if (totalSamples > 0 && uint64(index.Frame) > uint64(totalSamples-1)/uint64(rate/75)) ||
+				(totalSamples == 0 && float64(index.Frame)/75 >= md.audioProps.Duration.Seconds()) {
 				return nil, fmt.Errorf("CUE track %d starts outside the audio", t.TrackNumber)
 			}
 			starts[i] = int64(index.Frame) * int64(rate/75)
@@ -98,11 +99,14 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string) (m
 		set(model.TagReplayGainTrackGain, t.Rem.TrackGain())
 		set(model.TagReplayGainTrackPeak, t.Rem.TrackPeak())
 		props := md.audioProps
-		props.Duration -= time.Duration(starts[i]) * time.Second / time.Duration(rate)
-		var end int64
+		end := totalSamples
 		if i+1 < len(starts) {
 			end = starts[i+1]
-			props.Duration = time.Duration(end-starts[i]) * time.Second / time.Duration(rate)
+		}
+		if end > 0 {
+			props.Duration = time.Duration(float64(end-starts[i]) / float64(rate) * float64(time.Second))
+		} else {
+			props.Duration -= time.Duration(float64(starts[i]) / float64(rate) * float64(time.Second))
 		}
 		trackMD := New(md.filePath, Info{Tags: raw, FileInfo: md.fileInfo, AudioProperties: props, HasPicture: md.hasPicture})
 		mf := trackMD.ToMediaFile(libID, folderID)

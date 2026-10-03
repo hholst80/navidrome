@@ -2,8 +2,6 @@ package stream
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,13 +57,7 @@ type streamJob struct {
 }
 
 func (j *streamJob) Key() string {
-	key := fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d.%d.%d.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset, j.mf.CueTrack, j.mf.CueStartSample, j.mf.CueEndSample)
-	if segment := cueSegment(j.mf); segment != nil {
-		// JSON sorts map keys, so all embedded tags contribute deterministically.
-		tags, _ := json.Marshal(segment.Tags)
-		key += fmt.Sprintf(".%x", sha256.Sum256(tags))
-	}
-	return key
+	return fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset)
 }
 
 // NewStream creates a Stream for the given MediaFile and Request. It handles both raw streaming (no transcoding)
@@ -91,18 +83,8 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 	s := &Stream{ctx: ctx, mf: mf, format: format, bitRate: bitRate}
 	filePath := mf.AbsolutePath()
 
-	if format == "raw" && mf.CueTrack > 0 {
-		// Raw means original quality. A CUE track needs a standalone lossless
-		// container rather than the full source file or an arbitrary byte slice.
-		format = mf.Suffix
-		if format != "flac" && format != "wav" {
-			return nil, fmt.Errorf("unsupported CUE source format: %s", format)
-		}
-		s.format = format
-		req.SampleRate, req.Channels = mf.SampleRate, mf.Channels
-		if mf.BitDepth != nil {
-			req.BitDepth = *mf.BitDepth
-		}
+	if mf.CueTrack > 0 {
+		return ms.newCUEStream(ctx, mf, req)
 	}
 	if format == "raw" {
 		log.Debug(ctx, "Streaming RAW file", "id", mf.ID, "path", filePath,
@@ -186,7 +168,7 @@ func (s *Stream) Serve(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Content-Type", s.ContentType())
 
-	if req.Params(r).BoolOr("estimateContentLength", false) {
+	if s.mf.CueTrack == 0 && s.bitRate > 0 && req.Params(r).BoolOr("estimateContentLength", false) {
 		length := strconv.Itoa(s.EstimatedContentLength())
 		log.Trace(ctx, "Estimated content-length", "contentLength", length)
 		w.Header().Set("Content-Length", length)
@@ -281,7 +263,6 @@ func NewTranscodingCache() TranscodingCache {
 			}
 
 			out, err := job.ms.transcoder.Transcode(transcodingCtx, ffmpeg.TranscodeOptions{
-				Segment:    cueSegment(job.mf),
 				Command:    command,
 				Format:     job.format,
 				FilePath:   job.filePath,

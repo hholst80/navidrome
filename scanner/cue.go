@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"fmt"
+	"io"
 	"maps"
 	"path"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/metadata"
 	"github.com/navidrome/navidrome/model/metadata/cue"
+	"github.com/navidrome/navidrome/utils/pcmwave"
 )
 
 type cueSource struct {
@@ -52,8 +54,7 @@ func (p *phaseFolders) cueSources(entry *folderEntry) map[string]cueSource {
 			continue
 		}
 		fullPath := path.Join(entry.path, source)
-		// Prefer the matching basename, then lexical order. This also handles old
-		// duplicate .ape.cue sidecars left behind after conversion to FLAC.
+		// Prefer the matching basename, then lexical order for duplicate sheets.
 		preferred := strings.TrimSuffix(source, path.Ext(source)) + ".cue"
 		if prev, ok := sources[fullPath]; ok && (prev.name == preferred || name != preferred) {
 			continue
@@ -78,7 +79,7 @@ func (p *phaseFolders) expandCUE(md metadata.Metadata, source cueSource, entry *
 		return nil
 	}
 	if source.sheet == nil {
-		// Text CUESHEET tags are supported; binary FLAC CUESHEET blocks are not tags.
+		// WAV files may carry an embedded text CUESHEET tag.
 		text := md.CUEText()
 		if text == "" {
 			return nil
@@ -93,7 +94,36 @@ func (p *phaseFolders) expandCUE(md metadata.Metadata, source cueSource, entry *
 			source.sheet.File[0].FileName = path.Base(md.FilePath())
 		}
 	}
-	tracks, err := md.CUETracks(source.sheet, entry.job.lib.ID, entry.id)
+	var totalSamples int64
+	if md.Suffix() == "wav" {
+		f, err := entry.job.fs.Open(md.FilePath())
+		if err != nil {
+			p.cueWarning(md.FilePath(), err)
+			return nil
+		}
+		defer f.Close()
+		r, ok := f.(io.ReaderAt)
+		if !ok {
+			p.cueWarning(md.FilePath(), fmt.Errorf("CUE WAV source must support random access"))
+			return nil
+		}
+		info, err := f.Stat()
+		if err != nil {
+			p.cueWarning(md.FilePath(), err)
+			return nil
+		}
+		wav, err := pcmwave.Parse(r, info.Size())
+		if err != nil {
+			p.cueWarning(md.FilePath(), err)
+			return nil
+		}
+		if wav.Rate != md.AudioProperties().SampleRate {
+			p.cueWarning(md.FilePath(), fmt.Errorf("WAV sample rate differs from indexed metadata"))
+			return nil
+		}
+		totalSamples = wav.Samples()
+	}
+	tracks, err := md.CUETracks(source.sheet, entry.job.lib.ID, entry.id, totalSamples)
 	if err != nil {
 		p.cueWarning(md.FilePath(), err)
 		return nil

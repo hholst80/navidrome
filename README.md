@@ -58,6 +58,30 @@ A share of the revenue helps fund the development of Navidrome at no additional 
  - **Transcoding** on the fly. Can be set per user/player. **Opus encoding is supported**
  - Translated to **various languages**
 
+## Experimental CUE support with WAV streaming
+
+Enable `ND_SCANNER_CUESHEETSUPPORT=true` to expose a single WAV, FLAC, or APE album image as separate tracks using an
+external `.cue` sheet or an embedded text `CUESHEET` tag. Original-quality CUE playback always returns WAV/PCM.
+Playlists can mix these virtual tracks with ordinary audio files of any supported format.
+
+PCM WAV sources are read directly. FFmpeg seeks within FLAC and APE sources and decodes them on demand; FFprobe
+provides their exact sample counts. There is no lossless recompression. The WAV header is generated in memory, and audio flows directly to the client.
+No temporary audio files, transcoding-cache entries, or complete in-memory track copies are created. HTTP byte ranges
+work on the first request, including for FLAC/APE sources. The WAV data length and HTTP content length are exact before
+audio decoding starts, using integer sample counts rather than rounded durations. Sequential reads share a decoder;
+nonsequential reads restart it near the requested source sample. Time offsets are relative to the selected track and stop at its exact end.
+
+RIFF/RF64 and integer PCM WAVE_FORMAT_EXTENSIBLE sources support 8-, 16-, 24-, or 32-bit samples. Compressed and
+floating-point WAV are unsupported. Decoded FLAC/APE output supports these bit depths and recognized channel layouts
+up to eight channels. Multi-file sheets, synthetic gaps, pre-emphasis, binary FLAC CUESHEET blocks, and sample rates
+that are not divisible by 75 are unsupported.
+
+Explicit output-format conversions still use FFmpeg, bypass the disk cache, and do not provide HTTP byte ranges.
+Ordinary non-CUE playback keeps its existing transcoding behavior. Original/default album downloads retain the complete
+source image; request `format=wav` to export separate WAV tracks. Playlist exports use `.wav` filenames for original-quality
+CUE tracks. ZIP downloads stream without temporary files; an error after delivery starts aborts the download.
+The next scan refreshes existing CUE entries when upgrading from the earlier extraction implementation.
+
 ## Translations
 
 Navidrome uses [POEditor](https://poeditor.com/) for translations, and we are always looking 

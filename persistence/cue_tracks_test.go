@@ -22,7 +22,7 @@ func (f cueFileInfo) BirthTime() time.Time { return f.ModTime() }
 var _ = Describe("CUE track persistence", func() {
 	It("keeps tracks sharing a source separate and preserves their IDs on rescan", func() {
 		repo := NewMediaFileRepository(context.Background(), GetDBXBuilder())
-		const source = "cue-regression/album.flac"
+		const source = "cue-regression/album.wav"
 		DeferCleanup(func() {
 			_, err := GetDBXBuilder().NewQuery("DELETE FROM media_file WHERE path = {:path}").
 				Bind(map[string]interface{}{"path": source}).Execute()
@@ -35,7 +35,7 @@ var _ = Describe("CUE track persistence", func() {
 			FileInfo:        cueFileInfo{info},
 			AudioProperties: metadata.AudioProperties{SampleRate: 44100, Duration: 2 * time.Minute},
 		})
-		sheet, err := cue.ReadCue(strings.NewReader(`FILE "album.flac" WAVE
+		sheet, err := cue.ReadCue(strings.NewReader(`FILE "album.wav" WAVE
   TRACK 01 AUDIO
     TITLE "First"
     INDEX 01 00:00:00
@@ -48,7 +48,7 @@ var _ = Describe("CUE track persistence", func() {
 		Expect(repo.Put(&ordinary)).To(Succeed())
 		ids := []string{ordinary.ID}
 		for scan := range 2 {
-			tracks, err := md.CUETracks(sheet, 1, "")
+			tracks, err := md.CUETracks(sheet, 1, "", 120*44100)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tracks).To(HaveLen(2))
 			for i := range tracks {

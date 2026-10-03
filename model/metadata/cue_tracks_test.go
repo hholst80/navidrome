@@ -16,18 +16,18 @@ import (
 var _ = Describe("CUE disc metadata", func() {
 	DescribeTable("maps sheet disc metadata while retaining source fallbacks",
 		func(rem, sourceDisc string, expectedDisc int, expectedTotal string) {
-			_, filePath, _ := tests.TempFile(GinkgoT(), "cue", ".flac")
+			_, filePath, _ := tests.TempFile(GinkgoT(), "cue", ".wav")
 			info, err := os.Stat(filePath)
 			Expect(err).NotTo(HaveOccurred())
-			md := metadata.New("album.flac", metadata.Info{
+			md := metadata.New("album.wav", metadata.Info{
 				FileInfo:        testFileInfo{info},
 				Tags:            model.RawTags{"discnumber": {sourceDisc}},
 				AudioProperties: metadata.AudioProperties{Duration: time.Minute, SampleRate: 44100},
 			})
-			sheet, err := cue.ReadCue(strings.NewReader("FILE \"album.flac\" WAVE\n" + rem +
+			sheet, err := cue.ReadCue(strings.NewReader("FILE \"album.wav\" WAVE\n" + rem +
 				"  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"))
 			Expect(err).NotTo(HaveOccurred())
-			tracks, err := md.CUETracks(sheet, 1, "folder")
+			tracks, err := md.CUETracks(sheet, 1, "folder", 60*44100)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tracks).To(HaveLen(1))
 			Expect(tracks[0].DiscNumber).To(Equal(expectedDisc))

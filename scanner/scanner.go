@@ -88,8 +88,14 @@ func (s *scannerImpl) scanFolders(ctx context.Context, fullScan bool, targets []
 		state.sendError(fmt.Errorf("getting previous CUE support setting: %w", err))
 		return
 	}
-	if previousCUESupport != strconv.FormatBool(conf.Server.Scanner.CUESheetSupport) {
-		log.Info(ctx, "Scanner: CUE support setting changed, forcing full scan")
+	previousCUEVersion, err := s.ds.Property(ctx).DefaultGet(consts.ScannerCUESourceVersionKey, "")
+	if err != nil {
+		state.sendError(fmt.Errorf("getting CUE source version: %w", err))
+		return
+	}
+	if previousCUESupport != strconv.FormatBool(conf.Server.Scanner.CUESheetSupport) ||
+		(conf.Server.Scanner.CUESheetSupport && previousCUEVersion != consts.ScannerCUESourceVersion) {
+		log.Info(ctx, "Scanner: CUE support setting or source policy changed, forcing full scan")
 		if err := s.ds.Property(ctx).Put(consts.ScannerCUERefreshPendingKey, "true"); err != nil {
 			state.sendError(fmt.Errorf("marking CUE refresh pending: %w", err))
 			return
@@ -380,6 +386,9 @@ func (s *scannerImpl) runUpdateLibraries(ctx context.Context, state *scanState) 
 			if !state.isSelectiveScan() {
 				if err := tx.Property(ctx).Put(consts.ScannerCUESheetSupportKey, strconv.FormatBool(conf.Server.Scanner.CUESheetSupport)); err != nil {
 					return fmt.Errorf("updating CUE support setting: %w", err)
+				}
+				if err := tx.Property(ctx).Put(consts.ScannerCUESourceVersionKey, consts.ScannerCUESourceVersion); err != nil {
+					return fmt.Errorf("updating CUE source version: %w", err)
 				}
 				if err := tx.Property(ctx).Put(consts.ScannerCUERefreshPendingKey, "false"); err != nil {
 					return fmt.Errorf("clearing pending CUE refresh: %w", err)

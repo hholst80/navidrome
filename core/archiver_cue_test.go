@@ -36,6 +36,54 @@ func (cueArchiveTranscodingRepo) FindByFormat(format string) (*model.Transcoding
 }
 
 var _ = Describe("CUE archive downloads", func() {
+	It("streams mixed playlist exports with WAV names for APE CUE tracks", func() {
+		ctx := GinkgoT().Context()
+		source, err := filepath.Abs("tests/fixtures/cue-ape/stereo-24.ape")
+		Expect(err).NotTo(HaveOccurred())
+		ordinary, err := filepath.Abs("tests/fixtures/test.mp3")
+		Expect(err).NotTo(HaveOccurred())
+		boundary := int64(92 * (96000 / 75))
+		cueTrack := model.MediaFile{ID: "cue", Path: source, Suffix: "ape", CueTrack: 2, CueStartSample: boundary,
+			SampleRate: 96000, Channels: 2, BitDepth: new(24), Artist: "Artist", Title: "Second", Duration: 3 - 92.0/75}
+		ordinaryTrack := model.MediaFile{ID: "ordinary", Path: ordinary, Suffix: "mp3", Artist: "Other", Title: "Song"}
+		repo := &mockPlaylistRepository{}
+		repo.On("GetWithTracks", "playlist", true, false).Return(&model.Playlist{ID: "playlist", Name: "Mixed",
+			Tracks: []model.PlaylistTrack{{MediaFile: cueTrack}, {MediaFile: ordinaryTrack}}}, nil)
+		ds := &mockDataStore{DataStore: &tests.MockDataStore{}}
+		ds.On("Playlist", mock.Anything).Return(repo)
+		arch := core.NewArchiver(stream.NewMediaStreamer(ds, nil, nil), ds, nil)
+		GinkgoT().Setenv("TMPDIR", filepath.Join(GinkgoT().TempDir(), "does-not-exist"))
+		var out bytes.Buffer
+		Expect(arch.ZipPlaylist(ctx, "playlist", "raw", 0, &out)).To(Succeed())
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zr.File).To(HaveLen(3))
+		Expect(zr.File[0].Name).To(Equal("01 - Artist - Second.wav"))
+		Expect(zr.File[1].Name).To(Equal("02 - Other - Song.mp3"))
+		read := func(entry *zip.File) []byte {
+			r, err := entry.Open()
+			Expect(err).NotTo(HaveOccurred())
+			data, err := io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Close()).To(Succeed())
+			return data
+		}
+		wav := read(zr.File[0])
+		command := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "s24le", "-")
+		command.Stdin = bytes.NewReader(wav)
+		decoded, err := command.Output()
+		Expect(err).NotTo(HaveOccurred())
+		original, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", source, "-f", "s24le", "-").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(decoded).To(Equal(original[boundary*6:]))
+		originalMP3, err := os.ReadFile(ordinary)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(read(zr.File[1])).To(Equal(originalMP3))
+		playlist := string(read(zr.File[2]))
+		Expect(playlist).To(ContainSubstring(zr.File[0].Name))
+		Expect(playlist).To(ContainSubstring(zr.File[1].Name))
+	})
+
 	DescribeTable("exports distinct audio segments with unique names",
 		func(format, sourceFormat string, multiDisc bool) {
 			DeferCleanup(configtest.SetupConfig())
@@ -109,11 +157,13 @@ var _ = Describe("CUE archive downloads", func() {
 				Expect(pcm[1] < 128).To(Equal(i == 0))
 			}
 		},
+
+		Entry("default WAV", "", "wav", false),
 		Entry("raw FLAC", "raw", "flac", false),
-		Entry("default FLAC", "", "flac", false),
+		Entry("FLAC to WAV", "wav", "flac", false),
 		Entry("raw WAV", "raw", "wav", false),
 		Entry("converted WAV to FLAC", "flac", "wav", false),
-		Entry("converted FLAC", "flac", "flac", false),
-		Entry("multiple discs converted", "flac", "flac", true),
+		Entry("split WAV", "wav", "wav", false),
+		Entry("multiple discs converted", "flac", "wav", true),
 	)
 })
