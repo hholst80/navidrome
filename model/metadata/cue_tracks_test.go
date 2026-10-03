@@ -33,6 +33,8 @@ var _ = Describe("CUE disc metadata", func() {
 		Expect(tracks[1].CueStartSample).To(Equal(int64(60 * 44100)))
 		Expect(tracks[1].CueEndSample).To(BeZero())
 		Expect(tracks[1].Duration).To(BeZero())
+		Expect(tracks.ToAlbum().Duration).To(BeZero())
+		Expect(tracks[0].Duration).To(Equal(float32(60)))
 	}, Entry("FLAC", "flac"), Entry("APE", "ape"))
 
 	DescribeTable("maps sheet disc metadata while retaining source fallbacks",

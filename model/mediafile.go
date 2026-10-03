@@ -344,6 +344,7 @@ func (mfs MediaFiles) ToAlbum() Album {
 	embedArtPath := ""
 	embedArtDisc := 0
 	countedSources := map[string]bool{}
+	durationUnknown := false
 	for _, m := range mfs {
 		// We assume these attributes are all the same for all songs in an album
 		a.ID = m.AlbumID
@@ -363,6 +364,7 @@ func (mfs MediaFiles) ToAlbum() Album {
 
 		// Calculated attributes based on aggregations
 		a.Duration += m.Duration
+		durationUnknown = durationUnknown || (m.CueTrack > 0 && m.Duration <= 0)
 		if m.CueTrack == 0 || !countedSources[m.Path] {
 			a.Size += m.Size
 			countedSources[m.Path] = true
@@ -411,6 +413,11 @@ func (mfs MediaFiles) ToAlbum() Album {
 	a.RGAlbumGain = mostFrequentPtr(rgAlbumGains)
 	a.RGAlbumPeak = mostFrequentPtr(rgAlbumPeaks)
 	fixAlbumArtist(&a)
+
+	// A partial sum must not be advertised as the full CUE album duration.
+	if durationUnknown {
+		a.Duration = 0
+	}
 
 	return a
 }

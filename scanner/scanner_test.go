@@ -243,7 +243,7 @@ var _ = Describe("Scanner", Ordered, func() {
 		It("refreshes unchanged files after upgrading the CUE source policy", func() {
 			conf.Server.Scanner.CUESheetSupport = true
 			Expect(runScanner(ctx, false)).To(Succeed())
-			Expect(ds.Property(ctx).Put(consts.ScannerCUESourceVersionKey, "old-flac-wav")).To(Succeed())
+			Expect(ds.Property(ctx).Put(consts.ScannerCUESourceVersionKey, "lossless-to-wav-v1")).To(Succeed())
 			Expect(runScanner(ctx, false)).To(Succeed())
 			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
 			Expect(ds.Property(ctx).Get(consts.ScannerCUESourceVersionKey)).To(Equal(consts.ScannerCUESourceVersion))
