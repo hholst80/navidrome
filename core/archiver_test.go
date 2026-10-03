@@ -4,8 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"testing/iotest"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/navidrome/navidrome/core"
@@ -41,7 +45,7 @@ var _ = Describe("Archiver", func() {
 
 			mfRepo := &mockMediaFileRepository{}
 			mfRepo.On("GetAll", []model.QueryOptions{{
-				Filters: squirrel.Eq{"album_id": "1"},
+				Filters: squirrel.Eq{"album_id": "1", "missing": false},
 				Sort:    "album",
 			}}).Return(mfs, nil)
 
@@ -93,6 +97,110 @@ var _ = Describe("Archiver", func() {
 		})
 	})
 
+	DescribeTable("returns track failures without continuing the archive",
+		func(kind string, readFailure bool) {
+			tracks := model.MediaFiles{
+				{ID: "1", Path: "album.flac", CueTrack: 1, Title: "First", Suffix: "flac", Album: "Album", AlbumID: "1"},
+				{ID: "2", Path: "album.flac", CueTrack: 2, Title: "Second", Suffix: "flac", Album: "Album", AlbumID: "1"},
+			}
+			failure := errors.New("track extraction failed")
+			ms.On("NewStream", mock.Anything, &tracks[0], mock.Anything).
+				Return(io.NopCloser(strings.NewReader("first track")), nil).Once()
+			if readFailure {
+				ms.On("NewStream", mock.Anything, &tracks[1], mock.Anything).
+					Return(io.NopCloser(iotest.ErrReader(failure)), nil).Once()
+			} else {
+				ms.On("NewStream", mock.Anything, &tracks[1], mock.Anything).Return(nil, failure).Once()
+			}
+			out := new(bytes.Buffer)
+			var err error
+			switch kind {
+			case "album":
+				repo := &mockMediaFileRepository{}
+				repo.On("GetAll", mock.Anything).Return(tracks, nil)
+				ds.On("MediaFile", mock.Anything).Return(repo)
+				err = arch.ZipAlbum(context.Background(), "1", "flac", 0, out)
+			case "share":
+				err = arch.ZipShare(context.Background(), &model.Share{ID: "1", Downloadable: true, Format: "raw", Tracks: tracks}, out)
+			case "playlist":
+				repo := &mockPlaylistRepository{}
+				repo.On("GetWithTracks", "1", true, false).Return(&model.Playlist{ID: "1", Name: "Playlist",
+					Tracks: []model.PlaylistTrack{{MediaFile: tracks[0]}, {MediaFile: tracks[1]}}}, nil)
+				ds.On("Playlist", mock.Anything).Return(repo)
+				err = arch.ZipPlaylist(context.Background(), "1", "raw", 0, out)
+			}
+			Expect(err).To(MatchError(failure))
+			Expect(out.Len()).To(BeZero())
+			ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 2)
+		},
+		Entry("album stream creation", "album", false),
+		Entry("album stream reading", "album", true),
+		Entry("share stream creation", "share", false),
+		Entry("share stream reading", "share", true),
+		Entry("playlist stream creation", "playlist", false),
+		Entry("playlist stream reading", "playlist", true),
+	)
+
+	DescribeTable("copies each original CUE source once despite a historical ordinary row", func(format string, ordinaryFirst bool) {
+		source := filepath.Join(GinkgoT().TempDir(), "album.flac")
+		original := []byte("unchanged album source")
+		Expect(os.WriteFile(source, original, 0600)).To(Succeed())
+		ordinary := model.MediaFile{ID: "old", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", Missing: true}
+		tracks := model.MediaFiles{{ID: "cue1", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", CueTrack: 1}, {ID: "cue2", Path: source, Suffix: "flac", Album: "Album", AlbumID: "1", CueTrack: 2}}
+		if ordinaryFirst {
+			tracks = append(model.MediaFiles{ordinary}, tracks...)
+		} else {
+			tracks = append(tracks, ordinary)
+		}
+		repo := &mockMediaFileRepository{}
+		repo.On("GetAll", mock.Anything).Return(tracks, nil)
+		ds.On("MediaFile", mock.Anything).Return(repo)
+		var out bytes.Buffer
+		Expect(arch.ZipAlbum(context.Background(), "1", format, 0, &out)).To(Succeed())
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zr.File).To(HaveLen(1))
+		r, err := zr.File[0].Open()
+		Expect(err).NotTo(HaveOccurred())
+		data, err := io.ReadAll(r)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Close()).To(Succeed())
+		Expect(data).To(Equal(original))
+		ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 0)
+	}, Entry("raw ordinary first", "raw", true), Entry("raw ordinary last", "raw", false), Entry("default ordinary first", "", true), Entry("default ordinary last", "", false))
+
+	It("disambiguates colliding names from separate CUE images and existing suffixed names", func() {
+		tracks := model.MediaFiles{
+			{ID: "1", Path: "one.flac", CueTrack: 1, Title: "Same/Title", Suffix: "flac", Album: "Album", AlbumID: "1"},
+			{ID: "2", Path: "two.flac", CueTrack: 1, Title: "Same_Title", Suffix: "flac", Album: "Album", AlbumID: "1"},
+			{ID: "3", Path: "three.flac", CueTrack: 1, Title: "Same_Title (2)", Suffix: "flac", Album: "Album", AlbumID: "1"},
+			{ID: "4", Path: "four.flac", CueTrack: 1, Title: "same_title", Suffix: "flac", Album: "Album", AlbumID: "1"},
+		}
+		repo := &mockMediaFileRepository{}
+		repo.On("GetAll", mock.Anything).Return(tracks, nil)
+		ds.On("MediaFile", mock.Anything).Return(repo)
+		for i := range tracks {
+			track := tracks[i]
+			ms.On("NewStream", mock.Anything, &track, mock.Anything).
+				Return(io.NopCloser(strings.NewReader(track.ID)), nil).Once()
+		}
+		out := new(bytes.Buffer)
+		Expect(arch.ZipAlbum(context.Background(), "1", "flac", 0, out)).To(Succeed())
+		zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zr.File).To(HaveLen(4))
+		expected := []string{"01 - Same_Title.flac", "01 - Same_Title (2).flac", "01 - Same_Title (2) (2).flac", "01 - same_title (3).flac"}
+		for i, entry := range zr.File {
+			Expect(entry.Name).To(Equal("Album/" + expected[i]))
+			r, err := entry.Open()
+			Expect(err).NotTo(HaveOccurred())
+			data, err := io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Close()).To(Succeed())
+			Expect(string(data)).To(Equal(tracks[i].ID))
+		}
+	})
+
 	Context("when the transcode limiter rejects a file", func() {
 		It("aborts the archive instead of continuing with empty entries", func() {
 			mfs := model.MediaFiles{
@@ -102,7 +210,7 @@ var _ = Describe("Archiver", func() {
 
 			mfRepo := &mockMediaFileRepository{}
 			mfRepo.On("GetAll", []model.QueryOptions{{
-				Filters: squirrel.Eq{"album_id": "1"},
+				Filters: squirrel.Eq{"album_id": "1", "missing": false},
 				Sort:    "album",
 			}}).Return(mfs, nil)
 			ds.On("MediaFile", mock.Anything).Return(mfRepo)
@@ -113,6 +221,7 @@ var _ = Describe("Archiver", func() {
 			out := new(bytes.Buffer)
 			err := arch.ZipAlbum(context.Background(), "1", "mp3", 128, out)
 			Expect(err).To(MatchError(stream.ErrTooManyTranscodes))
+			Expect(out.Len()).To(BeZero())
 			// NewStream should only have been called once: the loop must bail
 			// out on the rejection instead of trying every remaining track.
 			ms.AssertNumberOfCalls(GinkgoT(), "NewStream", 1)

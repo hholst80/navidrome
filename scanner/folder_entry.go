@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/artwork"
 	"github.com/navidrome/navidrome/core/playlists"
 	"github.com/navidrome/navidrome/model"
@@ -22,6 +23,7 @@ func newFolderEntry(job *scanJob, id, path string, info model.FolderUpdateInfo) 
 		job:                 job,
 		path:                path,
 		audioFiles:          make(map[string]fs.DirEntry),
+		cueFiles:            make(map[string]fs.DirEntry),
 		imageFiles:          make(map[string]fs.DirEntry),
 		playlistFiles:       make(map[string]fs.DirEntry),
 		albumIDMap:          make(map[string]string),
@@ -41,6 +43,7 @@ type folderEntry struct {
 	modTime         time.Time // From FS
 	updTime         time.Time // from DB
 	audioFiles      map[string]fs.DirEntry
+	cueFiles        map[string]fs.DirEntry
 	imageFiles      map[string]fs.DirEntry
 	playlistFiles   map[string]fs.DirEntry
 	numSubFolders   int
@@ -105,6 +108,15 @@ func (f *folderEntry) toFolder() *model.Folder {
 
 func (f *folderEntry) hash() string {
 	h := md5.New()
+	if conf.Server.Scanner.CUESheetSupport {
+		_, _ = io.WriteString(h, "cue-v1")
+		for _, key := range slices.Sorted(maps.Keys(f.cueFiles)) {
+			_, _ = io.WriteString(h, key)
+			if info, err := f.cueFiles[key].Info(); err == nil {
+				_, _ = fmt.Fprintf(h, ":%d:%s", info.Size(), info.ModTime().UTC().String())
+			}
+		}
+	}
 	_, _ = fmt.Fprintf(
 		h,
 		"%s:%d:%d:%s",

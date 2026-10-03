@@ -15,6 +15,18 @@ var _ = Describe("MediaFiles", func() {
 	var mfs MediaFiles
 
 	Describe("ToAlbum", func() {
+		DescribeTable("aggregates CUE duration only when all track durations are known", func(cueTrack int, duration float32, expected float32) {
+			tracks := MediaFiles{
+				{ID: "unknown", CueTrack: cueTrack, Duration: duration, Path: "a.flac"},
+				{ID: "known", CueTrack: 1, Duration: 60, Path: "b.flac"},
+				{ID: "ordinary", Duration: 30, Path: "c.mp3"},
+			}
+			Expect(tracks.ToAlbum().Duration).To(Equal(expected))
+			Expect(tracks[1].Duration).To(Equal(float32(60)))
+		}, Entry("unknown CUE track", 2, float32(0), float32(0)),
+			Entry("known CUE track", 2, float32(20), float32(110)),
+			Entry("ordinary file behavior is unchanged", 0, float32(0), float32(90)))
+
 		Context("Simple attributes", func() {
 			BeforeEach(func() {
 				mfs = MediaFiles{

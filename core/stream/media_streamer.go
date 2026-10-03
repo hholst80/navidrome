@@ -83,6 +83,9 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 	s := &Stream{ctx: ctx, mf: mf, format: format, bitRate: bitRate}
 	filePath := mf.AbsolutePath()
 
+	if mf.CueTrack > 0 {
+		return ms.newCUEStream(ctx, mf, req)
+	}
 	if format == "raw" {
 		log.Debug(ctx, "Streaming RAW file", "id", mf.ID, "path", filePath,
 			"requestBitrate", req.BitRate, "requestFormat", req.Format, "requestOffset", req.Offset,
@@ -165,7 +168,7 @@ func (s *Stream) Serve(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Content-Type", s.ContentType())
 
-	if req.Params(r).BoolOr("estimateContentLength", false) {
+	if s.mf.CueTrack == 0 && s.bitRate > 0 && req.Params(r).BoolOr("estimateContentLength", false) {
 		length := strconv.Itoa(s.EstimatedContentLength())
 		log.Trace(ctx, "Estimated content-length", "contentLength", length)
 		w.Header().Set("Content-Length", length)

@@ -164,6 +164,7 @@ type configOptions struct {
 }
 
 type scannerOptions struct {
+	CUESheetSupport       bool // Expand WAV/FLAC/APE CUE images into virtual WAV tracks (FLAC/APE need FFmpeg)
 	Enabled               bool
 	Schedule              string
 	WatcherWait           time.Duration
@@ -1052,6 +1053,7 @@ func setViperDefaults() {
 	viper.SetDefault("jukebox.default", "")
 	viper.SetDefault("jukebox.adminonly", true)
 	viper.SetDefault("scanner.enabled", true)
+	viper.SetDefault("scanner.cuesheetsupport", false)
 	viper.SetDefault("scanner.schedule", "0")
 	viper.SetDefault("scanner.extractor", consts.DefaultScannerExtractor)
 	viper.SetDefault("scanner.watcherwait", consts.DefaultWatcherWait)

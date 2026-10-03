@@ -146,6 +146,13 @@ func buildSourceStream(mf *model.MediaFile, probe *ffmpeg.AudioProbeResult) Deta
 		sd.BitDepth = gg.V(mf.BitDepth)
 		sd.Channels = mf.Channels
 	}
+	if mf.CueTrack > 0 {
+		// Original-quality CUE playback is a virtual WAV, regardless of the
+		// lossless album image's container. Negotiate against those bytes.
+		sd.Container, sd.Codec, sd.Profile = "wav", "pcm", ""
+		sd.Bitrate = sd.SampleRate * sd.Channels * sd.BitDepth / 1000
+		sd.Size = 0 // The source image size does not describe this track.
+	}
 	sd.IsLossless = isLosslessFormat(sd.Codec)
 
 	return sd

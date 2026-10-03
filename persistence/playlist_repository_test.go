@@ -1,7 +1,11 @@
 package persistence
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/deluan/rest"
@@ -25,6 +29,56 @@ var _ = Describe("PlaylistRepository", func() {
 		ctx = request.WithUser(ctx, model.User{ID: "userid", UserName: "userid", IsAdmin: true})
 		repo = NewPlaylistRepository(ctx, GetDBXBuilder())
 	})
+
+	DescribeTable("estimates original playlist downloads as WAV for CUE entries", func(bits, channels, rate int, end int64, duration float32, want int64) {
+		tx, err := GetDBXBuilder().Begin()
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(tx.Rollback()).To(Succeed()) })
+		repo := NewPlaylistRepository(repo.(*playlistRepository).ctx, tx)
+		_, err = tx.NewQuery(`UPDATE media_file SET cue_track=1, cue_start_sample=100,
+			cue_end_sample={:end}, sample_rate={:rate}, channels={:channels}, bit_depth={:bits}, duration={:duration}, size=900000000
+			WHERE id={:id}`).Bind(dbx.Params{"id": songDayInALife.ID, "end": end, "rate": rate, "channels": channels, "bits": bits, "duration": duration}).Execute()
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.NewQuery("UPDATE media_file SET size=16777217 WHERE id={:id}").Bind(dbx.Params{"id": songRadioactivity.ID}).Execute()
+		Expect(err).NotTo(HaveOccurred())
+		pls := model.Playlist{Name: "WAV estimates", OwnerID: "userid"}
+		Expect(repo.Put(&pls)).To(Succeed())
+		Expect(repo.(*playlistRepository).updatePlaylist(pls.ID, []string{songDayInALife.ID, songRadioactivity.ID, songDayInALife.ID})).To(Succeed())
+		saved, err := repo.Get(pls.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.Size).To(Equal(2*want + 16777217))
+		Expect(saved.SongCount).To(Equal(3))
+		loaded, err := repo.GetWithTracks(pls.ID, false, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Size).To(Equal(saved.Size))
+		Expect(loaded.Duration).To(Equal(saved.Duration))
+		Expect(loaded.SongCount).To(Equal(saved.SongCount))
+		Expect(slice.Map(loaded.MediaFiles(), func(mf model.MediaFile) string { return mf.ID })).To(Equal([]string{songDayInALife.ID, songRadioactivity.ID, songDayInALife.ID}))
+		loaded.RemoveTracks([]int{0})
+		Expect(loaded.Size).To(Equal(want + 16777217))
+		Expect(loaded.SongCount).To(Equal(2))
+
+		// Upgrade existing playlists with exactly the same estimate, preserving their timestamps.
+		_, err = tx.NewQuery("UPDATE playlist SET size=1 WHERE id={:id}").Bind(dbx.Params{"id": pls.ID}).Execute()
+		Expect(err).NotTo(HaveOccurred())
+		_, file, _, ok := runtime.Caller(0)
+		Expect(ok).To(BeTrue())
+		migration, err := os.ReadFile(filepath.Join(filepath.Dir(file), "../db/migrations/20261003095000_cue_playlist_sizes.sql"))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.NewQuery(strings.Split(string(migration), "-- +goose Down")[0]).Execute()
+		Expect(err).NotTo(HaveOccurred())
+		upgraded, err := repo.Get(pls.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(upgraded.Size).To(Equal(saved.Size))
+		Expect(upgraded.UpdatedAt).To(Equal(saved.UpdatedAt))
+		Expect(upgraded.Duration).To(Equal(saved.Duration))
+	}, Entry("sample-exact stereo 16-bit", 16, 2, 44100, int64(44200), float32(99), int64(176444)),
+		Entry("sample-exact stereo 24-bit", 24, 2, 96000, int64(96100), float32(99), int64(576068)),
+		Entry("final track duration fallback", 24, 2, 48000, int64(0), float32(2.5), int64(720068)),
+		Entry("unknown duration", 16, 2, 44100, int64(0), float32(0), int64(0)),
+		Entry("default bit depth", 0, 2, 44100, int64(44200), float32(99), int64(176444)),
+		Entry("fractional final duration", 16, 2, 44100, int64(0), float32(0.1), int64(17684)),
+		Entry("surround WAV", 16, 6, 48000, int64(48100), float32(99), int64(576068)))
 
 	Describe("natural sorting", func() {
 		var ids []string

@@ -113,6 +113,174 @@ var _ = Describe("Scanner", Ordered, func() {
 		return queued
 	}
 
+	It("refreshes sidecar CUE tracks when a sheet is edited, shortened, and removed", func() {
+		conf.Server.Scanner.CUESheetSupport = true
+		album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album", "samplerate": 44100, "duration": 120})
+		fs := createCUEFS(fstest.MapFS{"one/album.wav": album()})
+		sheet := "FILE \"album.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n"
+		update := func(text string, minute int) {
+			when := time.Now().Add(time.Duration(minute) * time.Minute)
+			fs.Add("one/album.cue", &fstest.MapFile{Data: []byte(text), ModTime: when}, when)
+		}
+		active := func() model.MediaFiles {
+			tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}, Sort: "track_number"})
+			Expect(err).NotTo(HaveOccurred())
+			return tracks
+		}
+		update(sheet+"  TRACK 02 AUDIO\n    TITLE \"Second\"\n    INDEX 01 01:00:00\n", 1)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		initial := active()
+		Expect(initial).To(HaveLen(2))
+		Expect(initial[0].CueEndSample).To(Equal(int64(60 * 44100)))
+		update(sheet+"  TRACK 02 AUDIO\n    TITLE \"Renamed\"\n    INDEX 01 00:45:00\n", 2)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		edited := active()
+		Expect(edited).To(HaveLen(2))
+		Expect(edited[1].ID).To(Equal(initial[1].ID))
+		Expect(edited[1].Title).To(Equal("Renamed"))
+		Expect(edited[0].CueEndSample).To(Equal(int64(45 * 44100)))
+		update(sheet, 3)
+		Expect(runScanner(ctx, false)).To(Succeed())
+		Expect(active()).To(HaveLen(1))
+		Expect(active()[0].CueEndSample).To(Equal(int64(120 * 44100)))
+		fs.Remove("one/album.cue", time.Now().Add(4*time.Minute))
+		Expect(runScanner(ctx, false)).To(Succeed())
+		restored := active()
+		Expect(restored).To(HaveLen(1))
+		Expect(restored[0].CueTrack).To(BeZero())
+	})
+
+	DescribeTable("preserves album annotations when CUE expansion is removed", func(disable bool) {
+		conf.Server.Scanner.CUESheetSupport = false
+		album := template(_t{"albumartist": "Cue Artist", "album": "Image Album", "samplerate": 44100, "duration": 120})
+		fs := createCUEFS(fstest.MapFS{
+			"one/album.wav": album(),
+			"one/album.cue": &fstest.MapFile{Data: []byte("TITLE \"Sheet Album\"\nFILE \"album.wav\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 01:00:00\n")},
+		})
+		// Retain a historical ordinary row as well as the later virtual rows.
+		Expect(runScanner(ctx, false)).To(Succeed())
+		conf.Server.Scanner.CUESheetSupport = true
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(2))
+		oldID := tracks[0].AlbumID
+		Expect(ds.Album(ctx).SetRating(4, oldID)).To(Succeed())
+		Expect(ds.Album(ctx).SetStar(true, oldID)).To(Succeed())
+		if disable {
+			conf.Server.Scanner.CUESheetSupport = false
+		} else {
+			fs.Remove("one/album.cue", time.Now().Add(time.Minute))
+		}
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err = ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(1))
+		Expect(tracks[0].CueTrack).To(BeZero())
+		Expect(tracks[0].AlbumID).NotTo(Equal(oldID))
+		restored, err := ds.Album(ctx).Get(tracks[0].AlbumID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(restored.Rating).To(Equal(4))
+		Expect(restored.Starred).To(BeTrue())
+	}, Entry("removed sidecar", false), Entry("disabled CUE support", true))
+
+	DescribeTable("keeps unsupported CUE sources as ordinary files", func(name string, encoding int) {
+		conf.Server.Scanner.CUESheetSupport = true
+		album := template(_t{"samplerate": 44100, "duration": 120, "wav_format": encoding})
+		createCUEFS(fstest.MapFS{
+			"one/" + name:   album(),
+			"one/album.cue": &fstest.MapFile{Data: []byte("FILE \"" + name + "\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n")},
+		})
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(1))
+		Expect(tracks[0].CueTrack).To(BeZero())
+	}, Entry("MP3", "album.mp3", 1),
+		Entry("compressed WAV", "album.wav", 2), Entry("floating-point WAV", "album.wav", 3))
+
+	Context("CUE support setting changes", func() {
+		BeforeEach(func() {
+			album := template(_t{"albumartist": "Cue Artist", "album": "Cue Album",
+				"samplerate": 44100, "duration": 120, "cuesheet": `FILE "album.wav" WAVE
+  TRACK 01 AUDIO
+    TITLE "First"
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "Second"
+    INDEX 01 01:00:00
+`})
+			createCUEFS(fstest.MapFS{
+				"one/album.wav": album(),
+				"two/album.wav": album(_t{"album": "Other Cue Album"}),
+			})
+			Expect(runScanner(ctx, false)).To(Succeed())
+		})
+
+		activeTracks := func() model.MediaFiles {
+			GinkgoHelper()
+			tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+			Expect(err).NotTo(HaveOccurred())
+			return tracks
+		}
+
+		It("refreshes unchanged embedded sheets when enabled and restores ordinary files when disabled", func() {
+			Expect(activeTracks()).To(HaveLen(2))
+			conf.Server.Scanner.CUESheetSupport = true
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(4))
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("quick"))
+			conf.Server.Scanner.CUESheetSupport = false
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(2))
+			for _, track := range activeTracks() {
+				Expect(track.CueTrack).To(BeZero())
+			}
+		})
+
+		It("refreshes unchanged files after upgrading the CUE source policy", func() {
+			conf.Server.Scanner.CUESheetSupport = true
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Put(consts.ScannerCUESourceVersionKey, "lossless-to-wav-v1")).To(Succeed())
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUESourceVersionKey)).To(Equal(consts.ScannerCUESourceVersion))
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("quick"))
+		})
+
+		It("retries a CUE refresh after a failed scan", func() {
+			conf.Server.Scanner.CUESheetSupport = true
+			mfRepo.GetMissingAndMatchingError = errors.New("CUE refresh interrupted")
+			Expect(runScanner(ctx, false)).NotTo(Succeed())
+			Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("true"))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUESheetSupportKey)).To(Equal("false"))
+			mfRepo.GetMissingAndMatchingError = nil
+			Expect(runScanner(ctx, false)).To(Succeed())
+			Expect(activeTracks()).To(HaveLen(4))
+			Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("false"))
+		})
+
+		DescribeTable("keeps a refresh pending after a selective scan",
+			func(enabled bool, expectedTracks int) {
+				conf.Server.Scanner.CUESheetSupport = true
+				_, err := s.ScanFolders(ctx, false, []model.ScanTarget{{LibraryID: 1, FolderPath: "one"}})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(activeTracks()).To(HaveLen(3))
+				Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("true"))
+				conf.Server.Scanner.CUESheetSupport = enabled
+				Expect(runScanner(ctx, false)).To(Succeed())
+				Expect(activeTracks()).To(HaveLen(expectedTracks))
+				Expect(ds.Property(ctx).Get(consts.LastScanTypeKey)).To(Equal("full"))
+				Expect(ds.Property(ctx).Get(consts.ScannerCUERefreshPendingKey)).To(Equal("false"))
+			},
+			Entry("until all folders are refreshed", true, 4),
+			Entry("even if the setting is reverted", false, 2),
+		)
+	})
+
 	Context("Simple library, 'artis/album/track - title.mp3'", func() {
 		var help, revolver func(...map[string]any) *fstest.MapFile
 		var fsys storagetest.FakeFS

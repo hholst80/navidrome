@@ -24,8 +24,9 @@ import (
 
 // TranscodeOptions contains all parameters for a transcoding operation.
 type TranscodeOptions struct {
-	Command    string // DB command template (used to detect custom vs default)
-	Format     string // Target format (mp3, opus, aac, flac)
+	Input      io.Reader // Optional input stream; caller owns its lifetime.
+	Command    string    // DB command template (used to detect custom vs default)
+	Format     string    // Target format (mp3, opus, aac, flac)
 	FilePath   string
 	BitRate    int     // kbps, 0 = codec default
 	SampleRate int     // 0 = no constraint
@@ -81,13 +82,16 @@ func (e *ffmpeg) Transcode(ctx context.Context, opts TranscodeOptions) (io.ReadC
 	if err := fileExists(opts.FilePath); err != nil {
 		return nil, err
 	}
+	if opts.Input != nil {
+		opts.FilePath = "pipe:0"
+	}
 	var args []string
 	if isDefaultCommand(opts.Format, opts.Command) {
 		args = buildDynamicArgs(opts)
 	} else {
 		args = buildTemplateArgs(opts)
 	}
-	out, err := e.start(ctx, args)
+	out, err := e.start(ctx, args, opts.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -432,6 +436,7 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 
 // formatCodecMap maps target format to ffmpeg codec flag.
 var formatCodecMap = map[string]string{
+	"wav":  "pcm_s16le",
 	"mp3":  "libmp3lame",
 	"opus": "libopus",
 	"aac":  "aac",
@@ -440,6 +445,7 @@ var formatCodecMap = map[string]string{
 
 // formatOutputMap maps target format to ffmpeg output format flag (-f).
 var formatOutputMap = map[string]string{
+	"wav":  "wav",
 	"mp3":  "mp3",
 	"opus": "opus",
 	"aac":  "adts",
@@ -482,6 +488,16 @@ func buildDynamicArgs(opts TranscodeOptions) []string {
 	args = append(args, "-map_metadata", "0", "-map_metadata", "0:s:a:0")
 
 	if codec, ok := formatCodecMap[opts.Format]; ok {
+		if opts.Format == "wav" {
+			switch opts.BitDepth {
+			case 8:
+				codec = "pcm_u8"
+			case 24:
+				codec = "pcm_s24le"
+			case 32:
+				codec = "pcm_s32le"
+			}
+		}
 		args = append(args, "-c:a", codec)
 	}
 

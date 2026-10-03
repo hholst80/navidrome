@@ -2,10 +2,12 @@ package public
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/navidrome/navidrome/core"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils/req"
 	"github.com/navidrome/navidrome/utils/str"
@@ -37,5 +39,12 @@ func (pub *Router) handleDownloads(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/zip")
 
 	err = pub.archiver.ZipShare(ctx, s, w)
+	if errors.Is(err, core.ErrArchiveDelivery) {
+		panic(http.ErrAbortHandler)
+	}
+	if err != nil {
+		w.Header().Del("Content-Disposition")
+		w.Header().Del("Content-Type")
+	}
 	checkShareError(ctx, w, err, id)
 }

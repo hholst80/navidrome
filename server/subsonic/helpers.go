@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/core/publicurl"
+	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server/subsonic/responses"
@@ -219,6 +220,10 @@ func childFromMediaFile(ctx context.Context, mf model.MediaFile) responses.Child
 	child.Track = int32(mf.TrackNumber)
 	child.Duration = int32(mf.Duration)
 	child.Size = mf.Size
+	if mf.CueTrack > 0 {
+		// Source-image size is not the virtual WAV length; HTTP provides the exact size.
+		child.Size = 0
+	}
 	child.Suffix = mf.Suffix
 	child.BitRate = int32(mf.BitRate)
 	child.CoverArt = coverArtOrEmpty(mf.CoverArtID(), mf.ImageAbsent)
@@ -244,6 +249,9 @@ func childFromMediaFile(ctx context.Context, mf model.MediaFile) responses.Child
 	}
 
 	format, _ := getTranscoding(ctx)
+	if mf.CueTrack > 0 {
+		format = stream.OutputFormat(&mf, format)
+	}
 	if mf.Suffix != "" && format != "" && mf.Suffix != format {
 		child.TranscodedSuffix = format
 		child.TranscodedContentType = mime.TypeByExtension("." + format)

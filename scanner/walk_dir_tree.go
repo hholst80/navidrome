@@ -154,6 +154,8 @@ func loadDir(ctx context.Context, job *scanJob, dirPath string, checker *IgnoreC
 				continue
 			}
 			switch {
+			case strings.EqualFold(path.Ext(name), ".cue"):
+				folder.cueFiles[entry.Name()] = entry
 			case model.IsAudioFile(name):
 				folder.audioFiles[entry.Name()] = entry
 			case model.IsValidPlaylist(name):

@@ -13,6 +13,14 @@ import (
 // buildLegacyClientInfo translates legacy Subsonic stream/download parameters
 // into a ClientInfo for use with MakeDecision.
 func buildLegacyClientInfo(mf *model.MediaFile, reqFormat string, reqBitRate int, playerMaxBitRate int) *ClientInfo {
+	if mf.CueTrack > 0 {
+		virtual := *mf
+		virtual.Suffix, virtual.Codec = "wav", "pcm"
+		if virtual.BitDepth != nil {
+			virtual.BitRate = virtual.SampleRate * virtual.Channels * *virtual.BitDepth / 1000
+		}
+		mf = &virtual
+	}
 	ci := &ClientInfo{Name: "legacy"}
 
 	// Determine target format for transcoding

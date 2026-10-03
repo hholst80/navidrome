@@ -1,0 +1,67 @@
+package metadata_test
+
+import (
+	"os"
+	"strings"
+	"time"
+
+	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/model/metadata"
+	"github.com/navidrome/navidrome/model/metadata/cue"
+	"github.com/navidrome/navidrome/tests"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("CUE disc metadata", func() {
+	DescribeTable("expands compressed sources with unknown duration", func(suffix string) {
+		_, filePath, _ := tests.TempFile(GinkgoT(), "cue", "."+suffix)
+		info, err := os.Stat(filePath)
+		Expect(err).NotTo(HaveOccurred())
+		name := "album." + suffix
+		md := metadata.New(name, metadata.Info{
+			FileInfo:        testFileInfo{info},
+			AudioProperties: metadata.AudioProperties{SampleRate: 44100},
+		})
+		sheet, err := cue.ReadCue(strings.NewReader("FILE \"" + name + "\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 01:00:00\n"))
+		Expect(err).NotTo(HaveOccurred())
+		tracks, err := md.CUETracks(sheet, 1, "folder", 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(2))
+		Expect(tracks[0].CueEndSample).To(Equal(int64(60 * 44100)))
+		Expect(tracks[0].Duration).To(Equal(float32(60)))
+		Expect(tracks[1].CueStartSample).To(Equal(int64(60 * 44100)))
+		Expect(tracks[1].CueEndSample).To(BeZero())
+		Expect(tracks[1].Duration).To(BeZero())
+		Expect(tracks.ToAlbum().Duration).To(BeZero())
+		Expect(tracks[0].Duration).To(Equal(float32(60)))
+	}, Entry("FLAC", "flac"), Entry("APE", "ape"))
+
+	DescribeTable("maps sheet disc metadata while retaining source fallbacks",
+		func(rem, sourceDisc string, expectedDisc int, expectedTotal string) {
+			_, filePath, _ := tests.TempFile(GinkgoT(), "cue", ".wav")
+			info, err := os.Stat(filePath)
+			Expect(err).NotTo(HaveOccurred())
+			md := metadata.New("album.wav", metadata.Info{
+				FileInfo:        testFileInfo{info},
+				Tags:            model.RawTags{"discnumber": {sourceDisc}},
+				AudioProperties: metadata.AudioProperties{Duration: time.Minute, SampleRate: 44100},
+			})
+			sheet, err := cue.ReadCue(strings.NewReader("FILE \"album.wav\" WAVE\n" + rem +
+				"  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n"))
+			Expect(err).NotTo(HaveOccurred())
+			tracks, err := md.CUETracks(sheet, 1, "folder", 60*44100)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tracks).To(HaveLen(1))
+			Expect(tracks[0].DiscNumber).To(Equal(expectedDisc))
+			if expectedTotal != "" {
+				Expect(tracks[0].Tags[model.TagTotalDiscs]).To(Equal([]string{expectedTotal}))
+			}
+		},
+		Entry("sheet only", "REM DISCNUMBER 2\nREM TOTALDISCS 3\n", "", 2, "3"),
+		Entry("sheet overrides source", "REM DISCNUMBER 2\nREM TOTALDISCS 3\n", "1/2", 2, "3"),
+		Entry("source fallback", "", "2/3", 2, ""),
+		Entry("disc only retains source total", "REM DISCNUMBER 2\n", "1/3", 2, "3"),
+		Entry("total only retains source disc", "REM TOTALDISCS 4\n", "2", 2, "4"),
+	)
+})

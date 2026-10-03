@@ -2,6 +2,7 @@ package model
 
 import (
 	"iter"
+	"math"
 	"slices"
 	"strconv"
 	"time"
@@ -69,8 +70,36 @@ func (pls *Playlist) refreshStats() {
 	pls.Size = 0
 	for _, t := range pls.Tracks {
 		pls.Duration += t.MediaFile.Duration
-		pls.Size += t.MediaFile.Size
+		pls.Size += playlistTrackSize(t.MediaFile)
 	}
+}
+
+// playlistTrackSize estimates original playlist exports, which return CUE tracks
+// as PCM WAV. Keep this aligned with persistence.playlistDownloadSizeSQL;
+// repository tests compare persisted and loaded playlist sizes.
+func playlistTrackSize(mf MediaFile) int64 {
+	if mf.CueTrack == 0 {
+		return mf.Size
+	}
+	if mf.SampleRate <= 0 || mf.Channels <= 0 {
+		return 0
+	}
+	samples := mf.CueEndSample - mf.CueStartSample
+	if samples <= 0 {
+		if mf.Duration <= 0 {
+			return 0
+		}
+		samples = int64(math.Round(float64(mf.Duration) * float64(mf.SampleRate)))
+	}
+	bits := 16
+	if mf.BitDepth != nil && *mf.BitDepth != 0 {
+		bits = *mf.BitDepth
+	}
+	header := int64(44)
+	if mf.Channels > 2 || bits > 16 {
+		header = 68
+	}
+	return samples*int64(mf.Channels)*int64(bits/8) + header
 }
 
 func (pls *Playlist) SetTracks(tracks PlaylistTracks) {

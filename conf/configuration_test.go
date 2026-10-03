@@ -163,6 +163,13 @@ var _ = Describe("Configuration", func() {
 			Expect(conf.Server.Scanner.Schedule).To(Equal("@every 1h"))
 		})
 
+		It("loads CUE support from the environment", func() {
+			GinkgoT().Setenv("ND_SCANNER_CUESHEETSUPPORT", "true")
+			conf.InitConfig("", true)
+			conf.Load(true)
+			Expect(conf.Server.Scanner.CUESheetSupport).To(BeTrue())
+		})
+
 		It("exits with fatal error when both ND_ and canonical key exist", func() {
 			filename := filepath.Join("testdata", "cfg_nd_conflict.toml")
 			conf.InitConfig(filename, false)
