@@ -48,6 +48,16 @@ var _ = Describe("PlaylistRepository", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(saved.Size).To(Equal(2*want + 16777217))
 		Expect(saved.SongCount).To(Equal(3))
+		loaded, err := repo.GetWithTracks(pls.ID, false, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Size).To(Equal(saved.Size))
+		Expect(loaded.Duration).To(Equal(saved.Duration))
+		Expect(loaded.SongCount).To(Equal(saved.SongCount))
+		Expect(slice.Map(loaded.MediaFiles(), func(mf model.MediaFile) string { return mf.ID })).To(Equal([]string{songDayInALife.ID, songRadioactivity.ID, songDayInALife.ID}))
+		loaded.RemoveTracks([]int{0})
+		Expect(loaded.Size).To(Equal(want + 16777217))
+		Expect(loaded.SongCount).To(Equal(2))
+
 		// Upgrade existing playlists with exactly the same estimate, preserving their timestamps.
 		_, err = tx.NewQuery("UPDATE playlist SET size=1 WHERE id={:id}").Bind(dbx.Params{"id": pls.ID}).Execute()
 		Expect(err).NotTo(HaveOccurred())
@@ -66,6 +76,8 @@ var _ = Describe("PlaylistRepository", func() {
 		Entry("sample-exact stereo 24-bit", 24, 2, 96000, int64(96100), float32(99), int64(576068)),
 		Entry("final track duration fallback", 24, 2, 48000, int64(0), float32(2.5), int64(720068)),
 		Entry("unknown duration", 16, 2, 44100, int64(0), float32(0), int64(0)),
+		Entry("default bit depth", 0, 2, 44100, int64(44200), float32(99), int64(176444)),
+		Entry("fractional final duration", 16, 2, 44100, int64(0), float32(0.1), int64(17684)),
 		Entry("surround WAV", 16, 6, 48000, int64(48100), float32(99), int64(576068)))
 
 	Describe("natural sorting", func() {
