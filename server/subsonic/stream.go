@@ -176,6 +176,7 @@ func singleCUESource(tracks model.MediaFiles) *model.MediaFile {
 }
 
 func serveOriginalCUE(w http.ResponseWriter, r *http.Request, mf *model.MediaFile) error {
+	// #nosec G703 -- the authorized media record supplies the scanner-owned path, not a request path.
 	f, err := os.Open(mf.AbsolutePath())
 	if err != nil {
 		return err

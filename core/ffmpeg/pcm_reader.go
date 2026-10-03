@@ -22,6 +22,7 @@ func ProbePCM(ctx context.Context, path string) (*pcmwave.Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G204 -- executable comes from server configuration; the scanner-owned source path is a separate argument.
 	data, err := exec.CommandContext(ctx, ffprobePath(binary), "-v", "error", "-select_streams", "a:0",
 		"-show_entries", "stream=codec_name,sample_rate,channels,bits_per_sample,bits_per_raw_sample,duration_ts,time_base,channel_layout", "-of", "json", path).Output()
 	if err != nil {

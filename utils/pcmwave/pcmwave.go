@@ -66,18 +66,11 @@ func Parse(r io.ReaderAt, size int64) (*Source, error) {
 	var rfData uint64
 	pos := int64(12)
 	if rf64 {
-		var ds [36]byte
-		if _, err := r.ReadAt(ds[:], pos); err != nil {
+		var err error
+		limit, rfData, pos, err = readRF64(r, size)
+		if err != nil {
 			return nil, err
 		}
-		dsSize := int64(binary.LittleEndian.Uint32(ds[4:]))
-		riffSize := binary.LittleEndian.Uint64(ds[8:])
-		if string(ds[:4]) != "ds64" || dsSize < 28 || riffSize > math.MaxInt64-8 || dsSize > size-20 {
-			return nil, fmt.Errorf("invalid RF64 ds64 chunk")
-		}
-		limit = int64(riffSize) + 8
-		rfData = binary.LittleEndian.Uint64(ds[16:])
-		pos += 8 + dsSize + dsSize%2
 	}
 	if limit > size || limit < pos {
 		return nil, fmt.Errorf("truncated WAV container")
@@ -118,6 +111,19 @@ func Parse(r io.ReaderAt, size int64) (*Source, error) {
 		pos += int64(n + n%2)
 	}
 	return nil, fmt.Errorf("WAV data chunk not found")
+}
+
+func readRF64(r io.ReaderAt, size int64) (limit int64, dataSize uint64, next int64, err error) {
+	var ds [36]byte
+	if _, err = r.ReadAt(ds[:], 12); err != nil {
+		return 0, 0, 0, err
+	}
+	dsSize := int64(binary.LittleEndian.Uint32(ds[4:]))
+	riffSize := binary.LittleEndian.Uint64(ds[8:])
+	if string(ds[:4]) != "ds64" || dsSize < 28 || riffSize > math.MaxInt64-8 || dsSize > size-20 {
+		return 0, 0, 0, fmt.Errorf("invalid RF64 ds64 chunk")
+	}
+	return int64(riffSize) + 8, binary.LittleEndian.Uint64(ds[16:]), 20 + dsSize + dsSize%2, nil
 }
 
 func (s *Source) validate() error {

@@ -25,38 +25,11 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string, to
 	if strings.ContainsAny(file.FileName, "/\\") || file.FileName != path.Base(md.FilePath()) {
 		return nil, fmt.Errorf("CUE FILE must name the audio file in the same directory")
 	}
+	starts, err := md.cueBoundaries(file, totalSamples)
+	if err != nil {
+		return nil, err
+	}
 	rate := md.audioProps.SampleRate
-	if rate <= 0 || rate%75 != 0 || totalSamples < 0 {
-		return nil, fmt.Errorf("CUE sample rate must be a positive multiple of 75")
-	}
-	starts := make([]int64, len(file.Tracks))
-	for i, t := range file.Tracks {
-		if t.TrackDataType != "AUDIO" || t.PreGap != 0 || t.PostGap != 0 || t.Flags&cue.Pre != 0 {
-			return nil, fmt.Errorf("CUE data tracks, synthetic gaps and pre-emphasis are unsupported")
-		}
-		found := false
-		for _, index := range t.Index {
-			if index.Number != 1 {
-				continue
-			}
-			// Compare before multiplying to prevent overflow from hostile timestamps.
-			if (totalSamples > 0 && uint64(index.Frame) > uint64(totalSamples-1)/uint64(rate/75)) ||
-				(totalSamples == 0 && float64(index.Frame)/75 >= md.audioProps.Duration.Seconds()) {
-				return nil, fmt.Errorf("CUE track %d starts outside the audio", t.TrackNumber)
-			}
-			starts[i] = int64(index.Frame) * int64(rate/75)
-			found = true
-		}
-		if !found {
-			return nil, fmt.Errorf("CUE track %d has no INDEX 01", t.TrackNumber)
-		}
-		if i > 0 && starts[i] <= starts[i-1] {
-			return nil, fmt.Errorf("CUE track boundaries must increase")
-		}
-	}
-	// Preserve all source samples: any first-track pregap belongs to track one;
-	// subsequent INDEX 00 audio stays at the end of the preceding track.
-	starts[0] = 0
 	tracks := make(model.MediaFiles, 0, len(file.Tracks))
 	for i, t := range file.Tracks {
 		raw := model.RawTags{}
@@ -114,4 +87,40 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string, to
 		tracks = append(tracks, mf)
 	}
 	return tracks, nil
+}
+
+func (md Metadata) cueBoundaries(file cue.File, totalSamples int64) ([]int64, error) {
+	rate := md.audioProps.SampleRate
+	if rate <= 0 || rate%75 != 0 || totalSamples < 0 {
+		return nil, fmt.Errorf("CUE sample rate must be a positive multiple of 75")
+	}
+	starts := make([]int64, len(file.Tracks))
+	for i, t := range file.Tracks {
+		if t.TrackDataType != "AUDIO" || t.PreGap != 0 || t.PostGap != 0 || t.Flags&cue.Pre != 0 {
+			return nil, fmt.Errorf("CUE data tracks, synthetic gaps and pre-emphasis are unsupported")
+		}
+		found := false
+		for _, index := range t.Index {
+			if index.Number != 1 {
+				continue
+			}
+			// Compare before multiplying to prevent overflow from hostile timestamps.
+			if (totalSamples > 0 && uint64(index.Frame) > uint64(totalSamples-1)/uint64(rate/75)) ||
+				(totalSamples == 0 && float64(index.Frame)/75 >= md.audioProps.Duration.Seconds()) {
+				return nil, fmt.Errorf("CUE track %d starts outside the audio", t.TrackNumber)
+			}
+			starts[i] = int64(index.Frame) * int64(rate/75)
+			found = true
+		}
+		if !found {
+			return nil, fmt.Errorf("CUE track %d has no INDEX 01", t.TrackNumber)
+		}
+		if i > 0 && starts[i] <= starts[i-1] {
+			return nil, fmt.Errorf("CUE track boundaries must increase")
+		}
+	}
+	// Preserve all source samples: any first-track pregap belongs to track one;
+	// subsequent INDEX 00 audio stays at the end of the preceding track.
+	starts[0] = 0
+	return starts, nil
 }

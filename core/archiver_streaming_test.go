@@ -76,7 +76,6 @@ func TestArchiveResourceLimits(t *testing.T) {
 		if !errors.Is(err, context.Canceled) || out.String() != "first track" || !errors.Is(err, ErrArchiveDelivery) {
 			t.Fatalf("output=%q err=%v", out.String(), err)
 		}
-
 	})
 	t.Run("concurrent capacity", func(t *testing.T) {
 		// Nested calls keep both slots occupied while testing the third request.

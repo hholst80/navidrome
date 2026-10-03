@@ -14,7 +14,8 @@ import (
 
 func pcmFixture(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok)
 	return filepath.Join(filepath.Dir(file), "../../tests/fixtures/cue-ape/late-16.ape")
 }
 
