@@ -299,17 +299,35 @@ func (r *playlistRepository) addTracks(playlistId string, startingPos int, media
 	return r.refreshCounters(&model.Playlist{ID: playlistId})
 }
 
+// CUE entries download as PCM WAV. Estimate payload plus the base WAV header;
+// per-track INFO metadata and ZIP overhead are excluded. Known CUE boundaries
+// supply exact sample counts; the final track falls back to indexed duration.
+// Keep the upgrade recalculation in 20261003095000_cue_playlist_sizes.sql aligned.
+const playlistDownloadSizeSQL = `CASE WHEN cue_track = 0 THEN size
+WHEN sample_rate <= 0 OR channels <= 0
+  OR (cue_end_sample <= cue_start_sample AND duration <= 0) THEN 0
+ELSE
+  (CASE WHEN cue_end_sample > cue_start_sample THEN cue_end_sample - cue_start_sample
+        ELSE CAST(round(max(duration, 0) * sample_rate) AS INTEGER) END)
+  * channels * (coalesce(nullif(bit_depth, 0), 16) / 8)
+  + CASE WHEN channels > 2 OR coalesce(bit_depth, 16) > 16 THEN 68 ELSE 44 END
+END`
+
 // refreshCounters updates total playlist duration, size and count
 func (r *playlistRepository) refreshCounters(pls *model.Playlist) error {
 	statsSql := Select(
 		"coalesce(sum(duration), 0) as duration",
-		"coalesce(sum(size), 0) as size",
+		"coalesce(sum("+playlistDownloadSizeSQL+"), 0) as size",
 		"count(*) as count",
 	).
 		From("media_file").
 		Join("playlist_tracks f on f.media_file_id = media_file.id").
 		Where(Eq{"playlist_id": pls.ID})
-	var res struct{ Duration, Size, Count float32 }
+	var res struct {
+		Duration float32
+		Size     int64
+		Count    int
+	}
 	err := r.queryOne(statsSql, &res)
 	if err != nil {
 		return err
@@ -327,9 +345,9 @@ func (r *playlistRepository) refreshCounters(pls *model.Playlist) error {
 	if err != nil {
 		return err
 	}
-	pls.SongCount = int(res.Count)
+	pls.SongCount = res.Count
 	pls.Duration = res.Duration
-	pls.Size = int64(res.Size)
+	pls.Size = res.Size
 	pls.UpdatedAt = now
 	return nil
 }
