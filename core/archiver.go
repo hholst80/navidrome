@@ -6,14 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
@@ -61,33 +58,18 @@ func (a *archiver) ZipArtist(ctx context.Context, id string, format string, bitr
 	})
 }
 
-// ErrArchiveBusy indicates that the configured archive concurrency limit is reached.
-var ErrArchiveBusy = errors.New("archive download capacity reached")
-
-// ErrArchiveTooLarge indicates that the streamed ZIP reached its size limit.
-var ErrArchiveTooLarge = errors.New("archive exceeds configured size limit")
-
-var activeArchiveStreams atomic.Int64
-
 type archiveStreamWriter struct {
-	ctx         context.Context
-	out         io.Writer
-	remaining   int64
-	written     int64
-	writeFailed bool
+	ctx     context.Context
+	out     io.Writer
+	started bool
 }
 
 func (w *archiveStreamWriter) Write(p []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if int64(len(p)) > w.remaining {
-		return 0, ErrArchiveTooLarge
-	}
 	n, err := w.out.Write(p)
-	w.remaining -= int64(n)
-	w.written += int64(n)
-	w.writeFailed = w.writeFailed || err != nil
+	w.started = w.started || n > 0 || err != nil
 	return n, err
 }
 
@@ -97,24 +79,12 @@ func streamArchive(ctx context.Context, out io.Writer, write func(io.Writer) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if limit := conf.Server.MaxConcurrentArchives; limit > 0 {
-		active := activeArchiveStreams.Add(1)
-		defer activeArchiveStreams.Add(-1)
-		if active > int64(limit) {
-			return ErrArchiveBusy
-		}
-	}
-	limit := conf.Server.MaxArchiveSizeBytes
-	if limit <= 0 {
-		limit = math.MaxInt64
-	}
-
-	w := &archiveStreamWriter{ctx: ctx, out: out, remaining: limit}
+	w := &archiveStreamWriter{ctx: ctx, out: out}
 	err := write(w)
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err != nil && (w.written > 0 || w.writeFailed) {
+	if err != nil && w.started {
 		return fmt.Errorf("%w: %w", ErrArchiveDelivery, err)
 	}
 	return err

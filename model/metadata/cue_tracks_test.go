@@ -14,6 +14,27 @@ import (
 )
 
 var _ = Describe("CUE disc metadata", func() {
+	DescribeTable("expands compressed sources with unknown duration", func(suffix string) {
+		_, filePath, _ := tests.TempFile(GinkgoT(), "cue", "."+suffix)
+		info, err := os.Stat(filePath)
+		Expect(err).NotTo(HaveOccurred())
+		name := "album." + suffix
+		md := metadata.New(name, metadata.Info{
+			FileInfo:        testFileInfo{info},
+			AudioProperties: metadata.AudioProperties{SampleRate: 44100},
+		})
+		sheet, err := cue.ReadCue(strings.NewReader("FILE \"" + name + "\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 01:00:00\n"))
+		Expect(err).NotTo(HaveOccurred())
+		tracks, err := md.CUETracks(sheet, 1, "folder", 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(2))
+		Expect(tracks[0].CueEndSample).To(Equal(int64(60 * 44100)))
+		Expect(tracks[0].Duration).To(Equal(float32(60)))
+		Expect(tracks[1].CueStartSample).To(Equal(int64(60 * 44100)))
+		Expect(tracks[1].CueEndSample).To(BeZero())
+		Expect(tracks[1].Duration).To(BeZero())
+	}, Entry("FLAC", "flac"), Entry("APE", "ape"))
+
 	DescribeTable("maps sheet disc metadata while retaining source fallbacks",
 		func(rem, sourceDisc string, expectedDisc int, expectedTotal string) {
 			_, filePath, _ := tests.TempFile(GinkgoT(), "cue", ".wav")

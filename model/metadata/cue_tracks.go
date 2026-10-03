@@ -3,6 +3,7 @@ package metadata
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"path"
 	"strconv"
 	"strings"
@@ -79,7 +80,7 @@ func (md Metadata) CUETracks(sheet *cue.Cuesheet, libID int, folderID string, to
 		if end > 0 {
 			props.Duration = time.Duration(float64(end-starts[i]) / float64(rate) * float64(time.Second))
 		} else {
-			props.Duration -= time.Duration(float64(starts[i]) / float64(rate) * float64(time.Second))
+			props.Duration = max(0, props.Duration-time.Duration(float64(starts[i])/float64(rate)*float64(time.Second)))
 		}
 		trackMD := New(md.filePath, Info{Tags: raw, FileInfo: md.fileInfo, AudioProperties: props, HasPicture: md.hasPicture})
 		mf := trackMD.ToMediaFile(libID, folderID)
@@ -105,8 +106,9 @@ func (md Metadata) cueBoundaries(file cue.File, totalSamples int64) ([]int64, er
 				continue
 			}
 			// Compare before multiplying to prevent overflow from hostile timestamps.
-			if (totalSamples > 0 && uint64(index.Frame) > uint64(totalSamples-1)/uint64(rate/75)) ||
-				(totalSamples == 0 && float64(index.Frame)/75 >= md.audioProps.Duration.Seconds()) {
+			if uint64(index.Frame) > uint64(math.MaxInt64)/uint64(rate/75) ||
+				(totalSamples > 0 && uint64(index.Frame) > uint64(totalSamples-1)/uint64(rate/75)) ||
+				(totalSamples == 0 && md.audioProps.Duration > 0 && float64(index.Frame)/75 >= md.audioProps.Duration.Seconds()) {
 				return nil, fmt.Errorf("CUE track %d starts outside the audio", t.TrackNumber)
 			}
 			starts[i] = int64(index.Frame) * int64(rate/75)
