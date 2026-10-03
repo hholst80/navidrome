@@ -70,7 +70,6 @@ var (
 	ErrorMissingTrack             = fmt.Errorf("no TRACK")
 	ErrorTrackOutOfOrder          = fmt.Errorf("track out of order")
 	ErrorIndexOutOfOrder          = fmt.Errorf("index out of order")
-	ErrorExpectedTrackIndent      = fmt.Errorf("expected track indent")
 	ErrorDuplicateCatalog         = fmt.Errorf("duplicate CATALOG")
 	ErrorDuplicateCdTextFile      = fmt.Errorf("duplicate CDTEXTFILE")
 	ErrorDuplicatePerformer       = fmt.Errorf("duplicate PERFORMER")
@@ -88,7 +87,7 @@ var (
 var (
 	catalogRegex = regexp.MustCompile(`^(?:\d{8}|\d{12}|\d{13}|\d{14})$`)
 	isrcRegex    = regexp.MustCompile(`^[\da-zA-Z]{12}$`)
-	cueRegex     = regexp.MustCompile(`^\S+( )+\S+.+`)
+	cueRegex     = regexp.MustCompile(`^\S+[ \t]+\S+.*`)
 )
 
 // TrackIndex data
@@ -539,6 +538,23 @@ func readTrackFields(track *Track, line string) error {
 	}
 }
 
+// CUE context follows FILE/TRACK commands, independently of indentation.
+func cueFieldContext(sheet *Cuesheet, line string) ExpectedFields {
+	command, _ := readString(&line)
+	switch strings.ToUpper(command) {
+	case "FILE", "CATALOG", "CDTEXTFILE":
+		return ExpectCommon
+	case "TRACK":
+		return ExpectTracks
+	case "INDEX", "PREGAP", "POSTGAP", "ISRC", "FLAGS":
+		return ExpectTrack
+	}
+	if len(sheet.File) > 0 && len(sheet.File[len(sheet.File)-1].Tracks) > 0 {
+		return ExpectTrack
+	}
+	return ExpectCommon
+}
+
 // ReadCue loads and parses CUESHEET from reader
 func ReadCue(r io.Reader) (*Cuesheet, error) {
 	// Read one byte past the limit to distinguish oversized input from clean EOF.
@@ -547,11 +563,12 @@ func ReadCue(r io.Reader) (*Cuesheet, error) {
 	cuesheet := &Cuesheet{}
 
 	firstLine := true
-	var fields ExpectedFields
-	trackJustInserted := false
 
 	for s.Scan() {
-		line := s.Text()
+		line := strings.TrimLeft(s.Text(), delims)
+		if line == "" {
+			continue
+		}
 
 		if firstLine {
 			firstLine = false
@@ -561,32 +578,15 @@ func ReadCue(r io.Reader) (*Cuesheet, error) {
 			}
 		}
 
-		if strings.HasPrefix(line, "    ") {
-			line = line[4:]
-			fields = ExpectTrack
-			trackJustInserted = false
-		} else if strings.HasPrefix(line, "  ") {
-			line = line[2:]
-			fields = ExpectTracks
-			if trackJustInserted {
-				return nil, ErrorExpectedTrackIndent
-			}
-		} else {
-			fields = ExpectCommon
-			if trackJustInserted {
-				return nil, ErrorExpectedTrackIndent
-			}
-		}
-
 		var err error
-		switch fields {
+		switch cueFieldContext(cuesheet, line) {
 		case ExpectCommon:
 			err = readCUEFields(cuesheet, line)
 		case ExpectTracks:
 			if len(cuesheet.File) == 0 {
 				return nil, ErrorMissingFile
 			}
-			trackJustInserted, err = readFileFields(&cuesheet.File[len(cuesheet.File)-1], line)
+			_, err = readFileFields(&cuesheet.File[len(cuesheet.File)-1], line)
 		case ExpectTrack:
 			if len(cuesheet.File) == 0 {
 				return nil, ErrorMissingFile

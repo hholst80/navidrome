@@ -7,6 +7,9 @@ import (
 	"io"
 	"path/filepath"
 	"testing"
+
+	"github.com/navidrome/navidrome/conf"
+	"github.com/navidrome/navidrome/conf/configtest"
 )
 
 type failedArchiveWriter struct{ err error }
@@ -48,6 +51,7 @@ func TestArchiveStreaming(t *testing.T) {
 }
 
 func TestArchiveResourceLimits(t *testing.T) {
+	t.Cleanup(configtest.SetupConfig())
 	t.Run("size limit", func(t *testing.T) {
 		var out bytes.Buffer
 		w := &archiveStreamWriter{ctx: context.Background(), out: &out, remaining: 3}
@@ -78,6 +82,8 @@ func TestArchiveResourceLimits(t *testing.T) {
 		}
 	})
 	t.Run("concurrent capacity", func(t *testing.T) {
+		conf.Server.MaxConcurrentArchives = 2
+		defer func() { conf.Server.MaxConcurrentArchives = 0 }()
 		// Nested calls keep both slots occupied while testing the third request.
 		err := streamArchive(context.Background(), io.Discard, func(io.Writer) error {
 			return streamArchive(context.Background(), io.Discard, func(io.Writer) error {
@@ -90,8 +96,38 @@ func TestArchiveResourceLimits(t *testing.T) {
 		if !errors.Is(err, ErrArchiveBusy) {
 			t.Fatalf("got %v", err)
 		}
-		if len(archiveSlots) != 0 {
+		if activeArchiveStreams.Load() != 0 {
 			t.Fatal("archive slots leaked")
 		}
 	})
+}
+
+func TestArchiveDefaultLimitsAreUnlimited(t *testing.T) {
+	t.Cleanup(configtest.SetupConfig())
+	conf.Server.MaxArchiveSizeBytes = 0
+	conf.Server.MaxConcurrentArchives = 0
+	var nested func(int) error
+	nested = func(n int) error {
+		return streamArchive(t.Context(), io.Discard, func(w io.Writer) error {
+			if n > 0 {
+				return nested(n - 1)
+			}
+			// Reuse one buffer to exercise actual writes beyond the previous 2 GiB cap.
+			buf := make([]byte, 1<<20)
+			for range 2049 {
+				if _, err := w.Write(buf); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	if err := nested(4); err != nil {
+		t.Fatal(err)
+	}
+	conf.Server.MaxArchiveSizeBytes = 3
+	err := streamArchive(t.Context(), io.Discard, func(w io.Writer) error { _, err := w.Write([]byte("four")); return err })
+	if !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("configured size limit: %v", err)
+	}
 }

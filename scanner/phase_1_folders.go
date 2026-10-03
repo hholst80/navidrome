@@ -298,10 +298,8 @@ func (p *phaseFolders) loadTagsFromFiles(entry *folderEntry, toImport map[string
 				for _, t := range track.Tags.FlattenAll() {
 					uniqueTags[t.ID] = t
 				}
-				prevAlbumID := ""
-				if prev := previous[track.CueTrack]; prev != nil {
-					prevAlbumID = prev.AlbumID
-				} else {
+				prevAlbumID := previousSourceAlbum(toImport[filePath], track.CueTrack)
+				if prevAlbumID == "" {
 					prevAlbumID = md.AlbumID(track, p.prevAlbumPIDConf)
 				}
 				if _, ok := entry.albumIDMap[track.AlbumID]; prevAlbumID != track.AlbumID && !ok {
@@ -319,6 +317,29 @@ func (p *phaseFolders) loadTagsFromFiles(entry *folderEntry, toImport map[string
 	entry.tracks = tracks
 	entry.tags = slices.Collect(maps.Values(uniqueTags))
 	return nil
+}
+
+// A representation change can replace one ordinary row with CUE tracks or vice
+// versa. Preserve album annotations when the active source rows identify one album.
+func previousSourceAlbum(previous []*model.MediaFile, cueTrack int) string {
+	album := ""
+	ambiguous := false
+	for _, mf := range previous {
+		if mf.Missing {
+			continue
+		}
+		if mf.CueTrack == cueTrack {
+			return mf.AlbumID
+		}
+		if album != "" && album != mf.AlbumID {
+			ambiguous = true
+		}
+		album = mf.AlbumID
+	}
+	if ambiguous {
+		return ""
+	}
+	return album
 }
 
 // createAlbumsFromMediaFiles groups the entry's tracks by album ID and creates albums

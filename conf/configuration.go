@@ -54,7 +54,8 @@ type configOptions struct {
 	MaxSidebarPlaylists             int
 	EnableTranscodingConfig         bool
 	EnableDownloads                 bool
-	MaxArchiveSizeBytes             int64 // <= 0 uses 2 GiB; at most two ZIP downloads run concurrently.
+	MaxArchiveSizeBytes             int64 // <= 0 allows unlimited streamed ZIP size.
+	MaxConcurrentArchives           int   // <= 0 allows unlimited concurrent ZIP downloads.
 	EnableExternalServices          bool
 	EnableM3UExternalAlbumArt       bool
 	EnableInsightsCollector         bool
@@ -993,6 +994,7 @@ func setViperDefaults() {
 	viper.SetDefault("smartPlaylistRefreshDelay", consts.DefaultSmartRefresh)
 	viper.SetDefault("enabledownloads", true)
 	viper.SetDefault("maxarchivesizebytes", int64(0))
+	viper.SetDefault("maxconcurrentarchives", 0)
 	viper.SetDefault("enableexternalservices", true)
 	viper.SetDefault("enablem3uexternalalbumart", false)
 	viper.SetDefault("enablemediafilecoverart", true)

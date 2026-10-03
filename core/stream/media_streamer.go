@@ -229,7 +229,7 @@ func NewTranscodingCache() TranscodingCache {
 		func(ctx context.Context, arg cache.Item) (io.Reader, error) {
 			job := arg.(*streamJob)
 			command := LookupTranscodeCommand(ctx, job.ms.ds, job.format)
-			if command == "" && !(job.mf.CueTrack > 0 && job.format == "wav") {
+			if command == "" {
 				log.Error(ctx, "No transcoding command available", "format", job.format)
 				return nil, os.ErrInvalid
 			}

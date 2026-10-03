@@ -185,17 +185,18 @@ func TestCueReader(t *testing.T) {
 				assert.NotEmpty(t, cueRem)
 				assert.Contains(t, cueRem, "Foo")
 				assert.Contains(t, cueRem, "Bar")
-				assert.Contains(t, cueRem, "Yay!")
+				assert.NotContains(t, cueRem, "Yay!")
 				trackRem := output.File[0].Tracks[0].Rem
 				assert.NotEmpty(t, trackRem)
 				assert.Contains(t, trackRem, "Doox")
 				assert.Contains(t, trackRem, "Goox")
 				assert.Contains(t, trackRem, "Loox")
+				assert.Contains(t, trackRem, "Yay!")
 			},
 		},
 		{
 			inputFile: "parser-wrong-track-indent.cue",
-			error:     ErrorExpectedTrackIndent,
+			check:     func(output *Cuesheet) { assert.Equal(t, "Reverence", output.File[0].Tracks[0].Title) },
 		},
 		{
 			inputFile: "parser-duplicate-catalog.cue",
@@ -419,6 +420,22 @@ func TestDuplicateZeroValueTrackFields(t *testing.T) {
 			text := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n    " + field + "\n    " + field + "\n"
 			_, err := ReadCue(strings.NewReader(text))
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestCueWhitespaceDoesNotDefineContext(t *testing.T) {
+	for _, indent := range []string{"", "\t", " ", "   "} {
+		t.Run(fmt.Sprintf("indent=%q", indent), func(t *testing.T) {
+			text := "FILE\t\"album.wav\"\tWAVE\n" + indent + "TRACK 01 AUDIO\n" +
+				indent + "TITLE \"First\"\n" + indent + "INDEX 01 00:00:00\n" +
+				indent + "TRACK 02 AUDIO\n" + indent + "TITLE \"Second\"\n" + indent + "INDEX 01 01:00:00\n"
+			sheet, err := ReadCue(strings.NewReader(text))
+			require.NoError(t, err)
+			require.Len(t, sheet.File[0].Tracks, 2)
+			assert.Equal(t, "First", sheet.File[0].Tracks[0].Title)
+			assert.Equal(t, "Second", sheet.File[0].Tracks[1].Title)
+			assert.Equal(t, Frame(4500), sheet.File[0].Tracks[1].Index[0].Frame)
 		})
 	}
 }

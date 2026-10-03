@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/navidrome/navidrome/conf"
@@ -59,16 +61,13 @@ func (a *archiver) ZipArtist(ctx context.Context, id string, format string, bitr
 	})
 }
 
-// ErrArchiveBusy indicates that both archive download slots are occupied.
+// ErrArchiveBusy indicates that the configured archive concurrency limit is reached.
 var ErrArchiveBusy = errors.New("archive download capacity reached")
 
 // ErrArchiveTooLarge indicates that the streamed ZIP reached its size limit.
 var ErrArchiveTooLarge = errors.New("archive exceeds configured size limit")
 
-// Bound concurrent archive streams, including slow clients.
-var archiveSlots = make(chan struct{}, 2)
-
-const defaultMaxArchiveSizeBytes int64 = 2 * 1024 * 1024 * 1024
+var activeArchiveStreams atomic.Int64
 
 type archiveStreamWriter struct {
 	ctx         context.Context
@@ -98,15 +97,16 @@ func streamArchive(ctx context.Context, out io.Writer, write func(io.Writer) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	select {
-	case archiveSlots <- struct{}{}:
-		defer func() { <-archiveSlots }()
-	default:
-		return ErrArchiveBusy
+	if limit := conf.Server.MaxConcurrentArchives; limit > 0 {
+		active := activeArchiveStreams.Add(1)
+		defer activeArchiveStreams.Add(-1)
+		if active > int64(limit) {
+			return ErrArchiveBusy
+		}
 	}
 	limit := conf.Server.MaxArchiveSizeBytes
 	if limit <= 0 {
-		limit = defaultMaxArchiveSizeBytes
+		limit = math.MaxInt64
 	}
 
 	w := &archiveStreamWriter{ctx: ctx, out: out, remaining: limit}

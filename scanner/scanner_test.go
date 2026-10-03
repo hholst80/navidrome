@@ -150,6 +150,40 @@ var _ = Describe("Scanner", Ordered, func() {
 		Expect(restored[0].CueTrack).To(BeZero())
 	})
 
+	DescribeTable("preserves album annotations when CUE expansion is removed", func(disable bool) {
+		conf.Server.Scanner.CUESheetSupport = false
+		album := template(_t{"albumartist": "Cue Artist", "album": "Image Album", "samplerate": 44100, "duration": 120})
+		fs := createCUEFS(fstest.MapFS{
+			"one/album.wav": album(),
+			"one/album.cue": &fstest.MapFile{Data: []byte("TITLE \"Sheet Album\"\nFILE \"album.wav\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 01:00:00\n")},
+		})
+		// Retain a historical ordinary row as well as the later virtual rows.
+		Expect(runScanner(ctx, false)).To(Succeed())
+		conf.Server.Scanner.CUESheetSupport = true
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err := ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(2))
+		oldID := tracks[0].AlbumID
+		Expect(ds.Album(ctx).SetRating(4, oldID)).To(Succeed())
+		Expect(ds.Album(ctx).SetStar(true, oldID)).To(Succeed())
+		if disable {
+			conf.Server.Scanner.CUESheetSupport = false
+		} else {
+			fs.Remove("one/album.cue", time.Now().Add(time.Minute))
+		}
+		Expect(runScanner(ctx, false)).To(Succeed())
+		tracks, err = ds.MediaFile(ctx).GetAll(model.QueryOptions{Filters: squirrel.Eq{"missing": false}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tracks).To(HaveLen(1))
+		Expect(tracks[0].CueTrack).To(BeZero())
+		Expect(tracks[0].AlbumID).NotTo(Equal(oldID))
+		restored, err := ds.Album(ctx).Get(tracks[0].AlbumID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(restored.Rating).To(Equal(4))
+		Expect(restored.Starred).To(BeTrue())
+	}, Entry("removed sidecar", false), Entry("disabled CUE support", true))
+
 	DescribeTable("keeps unsupported CUE sources as ordinary files", func(name string, encoding int) {
 		conf.Server.Scanner.CUESheetSupport = true
 		album := template(_t{"samplerate": 44100, "duration": 120, "wav_format": encoding})

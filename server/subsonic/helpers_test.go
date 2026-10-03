@@ -209,13 +209,16 @@ var _ = Describe("helpers", func() {
 	)
 
 	Describe("childFromMediaFile", func() {
-		It("reports WAV playback for FLAC and APE CUE sources", func() {
-			for _, suffix := range []string{"flac", "ape"} {
-				mf := model.MediaFile{ID: "cue", CueTrack: 1, Suffix: suffix}
+		It("reports WAV playback without source-image sizes for CUE tracks", func() {
+			for _, suffix := range []string{"wav", "flac", "ape"} {
+				mf := model.MediaFile{ID: "cue", CueTrack: 1, Suffix: suffix, Size: 123456789}
 				child := childFromMediaFile(context.Background(), mf)
+				Expect(child.Size).To(BeZero())
 				Expect(child.Suffix).To(Equal(suffix))
-				Expect(child.TranscodedSuffix).To(Equal("wav"))
-				Expect(child.TranscodedContentType).To(Equal(mime.TypeByExtension(".wav")))
+				if suffix != "wav" {
+					Expect(child.TranscodedSuffix).To(Equal("wav"))
+					Expect(child.TranscodedContentType).To(Equal(mime.TypeByExtension(".wav")))
+				}
 			}
 		})
 
